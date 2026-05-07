@@ -291,16 +291,25 @@ html.dark #sankey-tooltip { background:#0d1929; border:1px solid var(--border); 
 .cal-cell.has-tx:hover { border-color:var(--accent); box-shadow:0 2px 8px rgba(99,102,241,.18); }
 .cal-cell.empty { background:var(--surface-3); box-shadow:none; border-color:transparent; }
 .cal-cell.today { border-color:var(--accent) !important; box-shadow:0 0 0 2px rgba(99,102,241,.2); }
+/* Day number row — flex container so the event-count badge sits on the right */
+.cal-day-header { display:flex; align-items:center; justify-content:space-between; line-height:1; }
 .cal-day-num { font-size:12px; font-weight:700; color:var(--text-4); line-height:1; }
 .cal-cell.today .cal-day-num { color:var(--accent); }
 .cal-cell.has-tx .cal-day-num { color:var(--text-1); }
-.cal-nw-chip { font-size:11px; font-weight:700; border-radius:4px; padding:2px 5px; margin-top:2px; align-self:flex-start; }
+/* Income / expense event-count badges — shown in a small row at the bottom of active tiles */
+.cal-tx-badges { display:flex; gap:4px; margin-top:2px; flex-wrap:wrap; }
+.cal-inc-badge { font-size:9px; font-weight:700; color:var(--c-pos); background:var(--c-pos-bg); border-radius:3px; padding:1px 5px; }
+.cal-exp-badge { font-size:9px; font-weight:700; color:var(--c-neg); background:var(--c-neg-bg); border-radius:3px; padding:1px 5px; }
+/* Asset / liability absolute-balance rows — the primary data on each tile */
+.cal-abs-row { display:flex; justify-content:space-between; align-items:baseline; font-size:10.5px; font-weight:700; line-height:1.45; }
+.cal-abs-row span:first-child { font-size:9px; font-weight:700; opacity:.65; text-transform:uppercase; letter-spacing:.05em; }
+.cal-abs-row.assets { color:#3b82f6; }
+html.dark .cal-abs-row.assets { color:#60a5fa; }
+.cal-abs-row.liab   { color:var(--c-neg); }
+/* Net worth chip — secondary display below assets/liabilities */
+.cal-nw-chip { font-size:10px; font-weight:700; border-radius:4px; padding:2px 5px; margin-top:1px; align-self:flex-start; }
 .cal-nw-chip.pos { background:var(--c-pos-bg); color:var(--c-pos); }
 .cal-nw-chip.neg { background:var(--c-neg-bg); color:var(--c-neg); }
-.cal-detail-row { display:flex; justify-content:space-between; font-size:10px; color:var(--text-3); }
-.cal-detail-row span:last-child { font-weight:600; }
-.cal-detail-row.pos span:last-child { color:var(--c-pos); }
-.cal-detail-row.neg span:last-child { color:var(--c-neg); }
 
 /* Calendar detail drawer */
 .cal-drawer { background:var(--surface); border-radius:11px; padding:20px 22px; border:1px solid var(--border-2); box-shadow:0 2px 8px var(--sh-sm); margin-top:18px; }
@@ -372,6 +381,13 @@ html.dark .cal-nav [data-tip]::before { border-bottom-color: #0d1929; border-top
 /* Light mode: show moon (click to go dark). Dark mode: show sun (click to go light). */
 html:not(.dark) #theme-sun { display:none; }
 html.dark       #theme-moon { display:none; }
+
+/* ─── Transaction status badges ─────────────────────────────────── */
+.tx-status { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; font-size:9px; font-weight:800; margin-right:5px; flex-shrink:0; line-height:1; vertical-align:middle; }
+.tx-status-cleared { background:#dcfce7; color:#16a34a; }
+.tx-status-pending { background:#fef9c3; color:#854d0e; }
+html.dark .tx-status-cleared { background:rgba(34,197,94,.15); color:#4ade80; }
+html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
 
 /* ─── Print ──────────────────────────────────────────────────────── */
 @media print {
@@ -584,7 +600,16 @@ html.dark       #theme-moon { display:none; }
               <option value="">All accounts</option>
             </select>
           </div>
-          <button class="btn btn-ghost" id="tx-clear-btn" onclick="clearTxFilter()" style="display:none">✕ Clear filter</button>
+          <div class="cf-filter-bar">
+            <label for="tx-status-filter">Status</label>
+            <select id="tx-status-filter" class="cf-filter-select" style="min-width:140px" onchange="applyTxFilter()">
+              <option value="">All statuses</option>
+              <option value="cleared">✓ Cleared (*)</option>
+              <option value="pending">! Pending (!)</option>
+              <option value="unmarked">○ Unmarked</option>
+            </select>
+          </div>
+          <button class="btn btn-ghost" id="tx-clear-btn" onclick="clearTxFilter()" style="display:none">✕ Clear filters</button>
         </div>
         <div class="table-card" id="transactions-table"></div>
       </div>
@@ -666,11 +691,32 @@ html.dark       #theme-moon { display:none; }
      JAVASCRIPT
 ═══════════════════════════════════════════════════════════════ -->
 <script>
+/*
+ * Folio — hLedger Reader  (single-file app, no build step)
+ *
+ * Architecture overview:
+ *   1. The user drops a plain-text .journal/.ledger file onto the upload screen.
+ *   2. parseLedger() converts the raw text into allTransactions[] — a flat array
+ *      of {date, status, cleared, description, postings[]} objects.
+ *   3. initDashboard() sets initial state (period anchor, filters) then calls
+ *      renderAll(), which is the single orchestration entry-point for every panel.
+ *   4. Every render function receives filteredTxs() — transactions sliced to the
+ *      current period window — as its primary data source. renderNetWorth() is the
+ *      exception: it always uses the full allTransactions history.
+ *   5. State is intentionally global and minimal (pType, pAnchor, filters, charts).
+ *      Changing any state variable → call renderAll() or the relevant sub-renderer.
+ *   6. Charts are stored in the charts{} map and destroyed before recreation to
+ *      prevent Chart.js canvas-reuse errors.
+ */
 'use strict';
 
 // ─── Dark mode ────────────────────────────────────────────────────
+// isDark() is used by applyChartTheme and wherever colors branch on theme.
 function isDark() { return document.documentElement.classList.contains('dark'); }
 
+// Sync Chart.js global defaults to the current CSS theme.
+// Must be called at boot (after the <head> class snippet runs) AND after every
+// theme toggle, because Chart.js bakes these values into each new chart instance.
 function applyChartTheme() {
   const dark = isDark();
   Chart.defaults.color       = dark ? '#64748b' : '#94a3b8';
@@ -688,20 +734,21 @@ function toggleTheme() {
 applyChartTheme();
 
 // ─── State ────────────────────────────────────────────────────────
-let allTransactions = [];
-let pType   = 'month';
-let pAnchor = new Date();
-let charts  = {};
-let calAnchor    = new Date(); // calendar month anchor
-let calView      = 'month';  // 'month' | 'week'
-let txAcctFilter = '';        // transactions panel account filter
+let allTransactions = []; // full parsed transaction list (never mutated after load)
+let pType   = 'month';    // active period type: 'week' | 'month' | 'quarter' | 'year' | 'all'
+let pAnchor = new Date(); // a date inside the current period (used as the reference point)
+let charts  = {};         // keyed Chart.js instances; entries are destroyed before recreation
+let calAnchor    = new Date(); // calendar month/week anchor (separate from the report period)
+let calView      = 'month';  // 'month' | 'week' — which calendar layout is active
+let txAcctFilter = '';        // transactions panel account filter (exact account name or '')
+let txStatusFilter = ''; // '' = all | 'cleared' | 'pending' | 'unmarked'
 
 // ─── Date helpers ─────────────────────────────────────────────────
-const pad2    = n => String(n).padStart(2,'0');
-const dateStr = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
-const addDays = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
-const addMo   = (d,n) => { const r=new Date(d); r.setMonth(r.getMonth()+n); return r; };
-const parseDt = s  => { const [y,m,d]=s.split('-'); return new Date(+y,+m-1,+d); };
+const pad2    = n => String(n).padStart(2,'0');                                   // zero-pad to 2 digits
+const dateStr = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; // Date → 'YYYY-MM-DD'
+const addDays = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };  // shift by N days
+const addMo   = (d,n) => { const r=new Date(d); r.setMonth(r.getMonth()+n); return r; }; // shift by N months
+const parseDt = s  => { const [y,m,d]=s.split('-'); return new Date(+y,+m-1,+d); }; // 'YYYY-MM-DD' → Date
 const moEnd   = (y,m) => new Date(y, m+1, 0); // last day of month (0-indexed m)
 
 function isoWeek(d) {
@@ -717,6 +764,10 @@ function weekMonday(d) {
 }
 
 // ─── Period management ────────────────────────────────────────────
+// Returns {start, end} as 'YYYY-MM-DD' strings for the current period.
+// pType ('week'|'month'|'quarter'|'year'|'all') selects the granularity;
+// pAnchor is any Date within the target period — the function normalises it
+// to the correct boundary (e.g. first/last day of the month or ISO week).
 function getPeriodRange() {
   const a=pAnchor, y=a.getFullYear(), m=a.getMonth(), d=a.getDate();
   switch(pType) {
@@ -737,6 +788,10 @@ function getPeriodRange() {
   }
 }
 
+// Returns the subset of allTransactions whose date falls within the current
+// period (inclusive). All report renderers except renderNetWorth() use this
+// as their primary data source — changing pType/pAnchor then calling renderAll()
+// is all that's needed to update every panel.
 function filteredTxs() {
   const {start,end}=getPeriodRange();
   return allTransactions.filter(t=>t.date>=start && t.date<=end);
@@ -776,7 +831,9 @@ function periodLabel() {
 }
 
 // ─── Sub-period bucketing ─────────────────────────────────────────
-// Returns [{label, start, end}] for the current period.
+// Returns [{label, start, end}] — the list of chart buckets for the current period.
+// Auto-selects granularity: ≤13 days → daily, ≤95 days → weekly, else monthly.
+// This drives both the Cash Flow chart x-axis and the Income period matrix.
 function getSubPeriods() {
   const {start,end}=getPeriodRange();
   const s=parseDt(start), e=parseDt(end);
@@ -831,6 +888,7 @@ function getMonthBuckets(s,e) {
 }
 
 // ─── File loading ─────────────────────────────────────────────────
+// Drop and file-input event listeners funnel into loadFile() → initDashboard().
 const dropZone=document.getElementById('drop-zone');
 const fileInput=document.getElementById('file-input');
 dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
@@ -845,6 +903,9 @@ function loadFile(file) {
   r.readAsText(file);
 }
 
+// Startup sequence after a file is loaded:
+//   parse → set pAnchor to last transaction's month → reset filters →
+//   populate filter dropdowns → renderAll() → swap screens.
 function initDashboard(content) {
   allTransactions=parseLedger(content);
   if(allTransactions.length) {
@@ -861,7 +922,8 @@ function initDashboard(content) {
   populateLookupAccounts();
   populateCFAccounts();
   populateTxAccounts();
-  txAcctFilter = '';
+  txAcctFilter   = '';
+  txStatusFilter = '';
   renderAll();
   document.getElementById('upload-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
@@ -878,6 +940,24 @@ function resetUpload() {
 }
 
 // ─── Ledger parser ────────────────────────────────────────────────
+/*
+ * parseLedger(raw) — converts raw hledger journal text to a sorted transaction array.
+ *
+ * hledger format recap:
+ *   DATE[=EDATE] [*|!] DESCRIPTION [; comment]   ← transaction header (non-indented)
+ *     ACCOUNT  AMOUNT                             ← posting (indented, 2+ spaces or tab)
+ *     ACCOUNT                                     ← elided posting (amount auto-computed)
+ *
+ * Parser logic:
+ *   1. Skip comment lines (;#%|) and directive lines (account, commodity, include, etc.)
+ *   2. The header regex captures date, optional status flag (* or !), and description.
+ *      Status is mapped to 'cleared' | 'pending' | 'unmarked'.
+ *   3. Indented lines are postings — split on 2+ spaces or a tab to separate account
+ *      from amount string. Lines with no amount are "elided" (amount=null).
+ *   4. Balancing pass: if exactly one posting in a transaction has amount=null,
+ *      it is set to the negative sum of all other postings (double-entry balance).
+ *   5. Transactions are sorted by date string (lexicographic = chronological for ISO dates).
+ */
 function parseLedger(raw) {
   const txList=[]; let cur=null;
   for(const line of raw.split(/\r?\n/)) {
@@ -886,7 +966,7 @@ function parseLedger(raw) {
     const hdr=line.match(/^(\d{4}[\/\-]\d{2}[\/\-]\d{2})(?:\s*=\s*\S+)?\s*([*!])?\s*(.*)/);
     if(hdr && !/^\s/.test(line)) {
       if(cur) txList.push(cur);
-      cur={ date:hdr[1].replace(/\//g,'-'), cleared:hdr[2]==='*', description:hdr[3].replace(/\s*;.*$/,'').trim(), postings:[] };
+      cur={ date:hdr[1].replace(/\//g,'-'), status:hdr[2]==='*'?'cleared':hdr[2]==='!'?'pending':'unmarked', cleared:hdr[2]==='*', description:hdr[3].replace(/\s*;.*$/,'').trim(), postings:[] };
       continue;
     }
     if(cur && /^\s+\S/.test(line)) {
@@ -904,6 +984,9 @@ function parseLedger(raw) {
   return txList.sort((a,b)=>a.date.localeCompare(b.date));
 }
 
+// Parses an hledger amount string (e.g. "$1,234.56", "-$42", "(50.00)") to a
+// signed float. Negative detection: explicit '-' character OR accounting parentheses.
+// Returns null for empty/unparseable strings (triggers the elided-posting path).
 function parseAmount(str) {
   if(!str) return null;
   const neg=str.includes('-')||str.trimStart().startsWith('(');
@@ -912,6 +995,9 @@ function parseAmount(str) {
 }
 
 // ─── Account helpers ──────────────────────────────────────────────
+// All classifiers use hledger's conventional top-level prefix (case-insensitive).
+// E.g. "Expenses:Food:Groceries" → isExpense → true; "Assets:Checking" → isAsset.
+// These are used everywhere to decide sign conventions and chart colors.
 const isIncome    = a=>/^(income|revenue)/i.test(a);
 const isExpense   = a=>/^expense/i.test(a);
 const isAsset     = a=>/^asset/i.test(a);
@@ -921,9 +1007,11 @@ function acctType(a){ return isIncome(a)?'income':isExpense(a)?'expense':isAsset
 function shortAcct(a){ return a.split(':').pop()||a; }
 
 // Build display rows for a sorted list of same-type accounts.
-// Strips the top-level prefix (Expenses/Income), groups siblings that share
-// a parent segment under a lightweight header row, and indents leaf names.
-// Returns [{fullAcct, label, indent, isGroupHeader}]
+// Algorithm: strip the top-level prefix (e.g. "Expenses"), then check how many
+// accounts share the same second segment (e.g. "Food"). If more than one share it,
+// emit a lightweight group-header row followed by indented leaf rows; singletons
+// appear as flat rows with no indent. Returns [{fullAcct, label, indent, isGroupHeader}].
+// fullAcct is null on group-header rows (no clickable balance).
 function buildAcctRows(accts) {
   const withSegs = accts.map(a => ({ full:a, segs:a.split(':').slice(1) }));
   const firstCount = {};
@@ -949,13 +1037,17 @@ function buildAcctRows(accts) {
 }
 
 // ─── Formatting ───────────────────────────────────────────────────
-const fmt       = (n,d=2)=>n==null?'—':Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
-const fmtCurrency = n=>n==null?'—':(n<0?'-':'')+'$'+fmt(n);
-const fmtSign   = n=>`<span class="${n>=0?'c-green':'c-red'} td-m">${n<0?'(':''}$${fmt(Math.abs(n))}${n<0?')':''}</span>`;
-const tkAxis    = v=>'$'+(Math.abs(v)>=1000?(v/1000).toFixed(1)+'k':v);
-const fmtK      = v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0);
+const fmt       = (n,d=2)=>n==null?'—':Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); // absolute value, locale thousands
+const fmtCurrency = n=>n==null?'—':(n<0?'-':'')+'$'+fmt(n);       // '$1,234.56' or '-$42.00'
+const fmtSign   = n=>`<span class="${n>=0?'c-green':'c-red'} td-m">${n<0?'(':''}$${fmt(Math.abs(n))}${n<0?')':''}</span>`; // colored HTML with accounting parens for negatives
+const tkAxis    = v=>'$'+(Math.abs(v)>=1000?(v/1000).toFixed(1)+'k':v); // Chart.js axis tick: compact '$1.2k'
+const fmtK      = v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0); // compact number for Sankey labels
 
 // ─── Category colour palette ──────────────────────────────────────
+// CATEGORY_COLORS maps lowercase keyword → hex. getCategoryColor() strips
+// non-alpha chars then looks up the key; on a miss it runs a stable djb2-style
+// hash over FALLBACK_PALETTE so each unknown category always gets the same color
+// across renders (important for Sankey consistency across period changes).
 const CATEGORY_COLORS = {
   // Housing / shelter
   housing:'#6366f1', rent:'#6366f1', mortgage:'#6366f1',
@@ -1014,8 +1106,12 @@ function catKey(account) { const s=account.split(':'); return s.length>1?s[1]:s[
 // CALENDAR VIEW
 // ══════════════════════════════════════════════════════════════════
 
-// Pre-compute a map of dateStr → {assetDelta, liabDelta, nwDelta, txCount}
-// by walking transactions once and tracking running balances.
+// Pre-compute a map of dateStr → {assetDelta, liabDelta, nwDelta, txCount, assetsEnd, liabEnd, nwEnd}.
+// Approach: group all transactions by date, then walk dates in sorted order while
+// maintaining running per-account balances (bal{}). After applying a day's transactions,
+// take end-of-day asset/liability snapshots and diff them against the previous day's
+// snapshot to produce the delta values shown on calendar cells and in the day drawer.
+// Using group-by-day prevents mid-day order from affecting the "delta vs. prev day" calc.
 function buildDailyDeltas() {
   // Group transactions by date first, then compute end-of-day snapshot
   // and delta vs. end of previous day — avoids mid-day accumulation errors.
@@ -1052,6 +1148,11 @@ function buildDailyDeltas() {
     map[ds] = {
       assetDelta, liabDelta, nwDelta,
       txCount : txs.length,
+      // Count transactions that touch income or expense accounts — used for tile badges.
+      // A single transaction can touch both (e.g., a paycheck split into expense lines),
+      // so we count distinct transactions rather than postings.
+      incomeCount : txs.filter(tx => tx.postings.some(p => isIncome(p.account))).length,
+      expenseCount: txs.filter(tx => tx.postings.some(p => isExpense(p.account))).length,
       assetsEnd: assets,
       liabEnd  : -liab,    // displayed as positive owed amount
       nwEnd    : nw,
@@ -1064,6 +1165,23 @@ function buildDailyDeltas() {
   return map;
 }
 
+// Returns the most recent snapshot on or before `ds` from the deltas map.
+// Since buildDailyDeltas() only stores entries for days that have transactions,
+// this carry-forward lookup lets every calendar tile show the current running
+// balance even on quiet (zero-transaction) days.
+// Returns null if no transactions have occurred before or on `ds`.
+function snapshotAsOf(deltas, ds) {
+  let best = null;
+  // Keys are ISO date strings — lexicographic sort == chronological sort
+  for(const k of Object.keys(deltas).sort()) {
+    if(k <= ds) best = deltas[k];
+    else break;
+  }
+  return best;
+}
+
+// Entry point — delegates to the active layout variant.
+// buildDailyDeltas() is called once here and shared between both variants.
 function renderCalendar() {
   const deltas = buildDailyDeltas();
   const todayStr = dateStr(new Date());
@@ -1071,6 +1189,9 @@ function renderCalendar() {
   else                   _renderCalMonth(deltas, todayStr);
 }
 
+// Renders a traditional month grid (Sun–Sat columns, ~5 weeks).
+// Each cell shows asset/liability/NW deltas for that day if transactions exist.
+// Clicking a cell calls calSelectDay() which populates the drawer below the grid.
 function _renderCalMonth(deltas, todayStr) {
   const y = calAnchor.getFullYear(), m = calAnchor.getMonth();
   document.getElementById('cal-month-label').textContent =
@@ -1093,13 +1214,29 @@ function _renderCalMonth(deltas, todayStr) {
     const isToday = ds === todayStr;
     const hasTx = !!info;
 
-    let inner = `<div class="cal-day-num">${d}</div>`;
-    if(info) {
-      const nwDir  = info.nwDelta >= 0 ? 'pos' : 'neg';
-      const nwSign = info.nwDelta >= 0 ? '+' : '';
-      inner += `<div class="cal-nw-chip ${nwDir}">${nwSign}$${fmtK(Math.abs(info.nwDelta))}</div>`;
-      inner += `<div class="cal-detail-row ${info.assetDelta>=0?'pos':'neg'}"><span>Assets</span><span>${info.assetDelta>=0?'+':''}$${fmtK(Math.abs(info.assetDelta))}</span></div>`;
-      inner += `<div class="cal-detail-row ${info.liabDelta<=0?'pos':'neg'}"><span>Liab</span><span>${info.liabDelta>0?'+':''}$${fmtK(Math.abs(info.liabDelta))}</span></div>`;
+    // Use carry-forward lookup so every day shows balances, not just transaction days.
+    // `snap` is the most recent known state on or before this date (may be from a prior day).
+    // `info` is only non-null when this exact day has transactions.
+    const snap = snapshotAsOf(deltas, ds);
+
+    // Day number is always shown; we don't need a separate badge here since
+    // income/expense counts appear in their own row at the bottom.
+    let inner = `<div class="cal-day-header"><span class="cal-day-num">${d}</span></div>`;
+
+    if(snap) {
+      // Absolute end-of-day balances — the primary question: "where do I stand?"
+      inner += `<div class="cal-abs-row assets"><span>A</span><span>$${fmtK(snap.assetsEnd)}</span></div>`;
+      inner += `<div class="cal-abs-row liab"><span>L</span><span>$${fmtK(snap.liabEnd)}</span></div>`;
+      // Net worth chip as a secondary summary
+      const nwDir = snap.nwEnd >= 0 ? 'pos' : 'neg';
+      inner += `<div class="cal-nw-chip ${nwDir}">NW $${fmtK(Math.abs(snap.nwEnd))}</div>`;
+    }
+    // Income and expense event counts only appear on days that actually have transactions
+    if(info && (info.incomeCount > 0 || info.expenseCount > 0)) {
+      let badges = '';
+      if(info.incomeCount)  badges += `<span class="cal-inc-badge">↑${info.incomeCount}</span>`;
+      if(info.expenseCount) badges += `<span class="cal-exp-badge">↓${info.expenseCount}</span>`;
+      inner += `<div class="cal-tx-badges">${badges}</div>`;
     }
 
     html += `<div class="cal-cell ${hasTx?'has-tx':''} ${isToday?'today':''}"
@@ -1115,6 +1252,9 @@ function _renderCalMonth(deltas, todayStr) {
   document.getElementById('cal-drawer').innerHTML = '';
 }
 
+// Renders a 7-column week strip (Mon–Sun) with one column per day.
+// Shows per-day delta stats plus a full transaction list in each column.
+// More verbose than the month view — suited for detailed daily review.
 function _renderCalWeek(deltas, todayStr) {
   const weekStart = weekMonday(calAnchor);
   const weekEnd   = addDays(weekStart, 6);
@@ -1136,11 +1276,25 @@ function _renderCalWeek(deltas, todayStr) {
     const dayLabel = day.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
     const dayTxs   = hasTx ? allTransactions.filter(t => t.date === ds) : [];
 
-    let inner = `<div class="cal-day-num">${dayLabel}</div>`;
-    if(info) {
-      const nwDir  = info.nwDelta >= 0 ? 'pos' : 'neg';
-      const nwSign = info.nwDelta >= 0 ? '+' : '';
-      inner += `<div class="cal-nw-chip ${nwDir}">${nwSign}$${fmtK(Math.abs(info.nwDelta))}</div>`;
+    // Week cell: same balance-first layout as month view, but taller so transaction
+    // descriptions can appear below the stats block.
+    // Use carry-forward snapshot so balances show every day, not just transaction days.
+    const snap = snapshotAsOf(deltas, ds);
+
+    let inner = `<div class="cal-day-header"><span class="cal-day-num">${dayLabel}</span></div>`;
+    if(snap) {
+      // Absolute end-of-day balances — always visible regardless of transaction activity
+      inner += `<div class="cal-abs-row assets"><span>A</span><span>$${fmtK(snap.assetsEnd)}</span></div>`;
+      inner += `<div class="cal-abs-row liab"><span>L</span><span>$${fmtK(snap.liabEnd)}</span></div>`;
+      const nwDir = snap.nwEnd >= 0 ? 'pos' : 'neg';
+      inner += `<div class="cal-nw-chip ${nwDir}">NW $${fmtK(Math.abs(snap.nwEnd))}</div>`;
+    }
+    // Income/expense counts on active days
+    if(hasTx && (deltas[ds].incomeCount > 0 || deltas[ds].expenseCount > 0)) {
+      let badges = '';
+      if(deltas[ds].incomeCount)  badges += `<span class="cal-inc-badge">↑${deltas[ds].incomeCount}</span>`;
+      if(deltas[ds].expenseCount) badges += `<span class="cal-exp-badge">↓${deltas[ds].expenseCount}</span>`;
+      inner += `<div class="cal-tx-badges">${badges}</div>`;
     }
     if(dayTxs.length) {
       inner += `<div class="cal-week-txs">`;
@@ -1224,7 +1378,8 @@ function calSelectDay(ds) {
       const ph = tx.postings.map(p =>
         `<div class="tx-posting"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount??0)<0?'c-red':'c-slate'}">${p.amountStr??'—'}</span></div>`
       ).join('');
-      html += `<tr><td style="font-weight:500;min-width:140px">${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
+      const sb = tx.status==='cleared'?`<span class="tx-status tx-status-cleared" title="Cleared">✓</span>`:tx.status==='pending'?`<span class="tx-status tx-status-pending" title="Pending">!</span>`:'';
+      html += `<tr><td style="font-weight:500;min-width:140px">${sb}${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
     }
     html += `</tbody></table>`;
   }
@@ -1237,6 +1392,8 @@ function calSelectDay(ds) {
 }
 
 // ─── Navigation ───────────────────────────────────────────────────
+// Switches the visible report panel and highlights the matching sidebar nav item.
+// Also hides the global period selector on the Calendar panel (it has its own nav).
 function showPanel(name) {
   document.querySelectorAll('.report-panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -1248,6 +1405,10 @@ function showPanel(name) {
 function destroyChart(id){ if(charts[id]){charts[id].destroy();delete charts[id];} }
 
 // ─── Render orchestrator ──────────────────────────────────────────
+// Central re-render entry point. Call this whenever pType, pAnchor, or the
+// underlying transaction data changes. Each sub-renderer is responsible for
+// destroying/recreating its own charts. renderNetWorth() ignores the period
+// filter and always reads the full allTransactions array.
 function renderAll() {
   document.getElementById('period-label').textContent=periodLabel();
   const txs=filteredTxs();
@@ -1264,6 +1425,11 @@ function renderAll() {
 // ══════════════════════════════════════════════════════════════════
 // INCOME STATEMENT
 // ══════════════════════════════════════════════════════════════════
+// Aggregates income (negative amounts in hledger convention → flipped positive)
+// and expense (positive amounts) from the filtered period txs.
+// Renders: summary stat cards, a donut chart (income vs. expenses),
+// a horizontal bar chart (top 8 expense categories), the period matrix,
+// and a grouped tree detail table using buildAcctRows().
 function renderIncomeStatement(txs) {
   const income={}, expenses={};
   for(const tx of txs) for(const p of tx.postings) {
@@ -1434,6 +1600,12 @@ function renderPeriodMatrix() {
 // ══════════════════════════════════════════════════════════════════
 // CASH FLOW (sub-period aware, with per-account drill-down)
 // ══════════════════════════════════════════════════════════════════
+// Two modes controlled by the cf-acct-filter dropdown:
+//   Aggregate mode (no filter): income bars vs. expense bars + net-flow line
+//     bucketed into sub-periods via getSubPeriods().
+//   Drill-down mode (account selected): shows that account's running balance
+//     (open balance computed as of the day before period start) plus per-bucket
+//     change bars and a running balance line.
 function renderCashFlow(txs) {
   const acctFilter = document.getElementById('cf-acct-filter')?.value || '';
   const sps        = getSubPeriods();
@@ -1570,6 +1742,11 @@ function renderCashFlow(txs) {
 // ══════════════════════════════════════════════════════════════════
 // NET WORTH (always full history, monthly)
 // ══════════════════════════════════════════════════════════════════
+// Deliberately ignores the period filter — net worth is a cumulative balance
+// that only makes sense viewed from inception. Builds one point per calendar
+// month by streaming through the sorted transaction list once with a running
+// balance map. The chart display range is clipped to the current period for
+// visual focus, but summary stats always reflect the latest (all-time) snapshot.
 function renderNetWorth() {
   const sorted=[...allTransactions].sort((a,b)=>a.date.localeCompare(b.date));
   const allMonths=[...new Set(sorted.map(t=>t.date.slice(0,7)))].sort();
@@ -1664,23 +1841,30 @@ function populateTxAccounts() {
 }
 
 function applyTxFilter() {
-  txAcctFilter = document.getElementById('tx-acct-filter').value;
-  document.getElementById('tx-clear-btn').style.display = txAcctFilter ? '' : 'none';
+  txAcctFilter    = document.getElementById('tx-acct-filter').value;
+  txStatusFilter  = document.getElementById('tx-status-filter').value;
+  const hasFilter = txAcctFilter || txStatusFilter;
+  document.getElementById('tx-clear-btn').style.display = hasFilter ? '' : 'none';
   renderTransactions(filteredTxs());
 }
 
 function clearTxFilter() {
-  txAcctFilter = '';
-  document.getElementById('tx-acct-filter').value = '';
+  txAcctFilter   = '';
+  txStatusFilter = '';
+  document.getElementById('tx-acct-filter').value    = '';
+  document.getElementById('tx-status-filter').value  = '';
   document.getElementById('tx-clear-btn').style.display = 'none';
   renderTransactions(filteredTxs());
 }
 
 // Navigate to Transactions panel filtered to a specific account
 function filterToAccount(acct) {
-  txAcctFilter = acct;
+  txAcctFilter   = acct;
+  txStatusFilter = '';
   const sel = document.getElementById('tx-acct-filter');
   if(sel) sel.value = acct;
+  const statusSel = document.getElementById('tx-status-filter');
+  if(statusSel) statusSel.value = '';
   document.getElementById('tx-clear-btn').style.display = acct ? '' : 'none';
   renderTransactions(filteredTxs());
   showPanel('transactions');
@@ -1689,6 +1873,22 @@ function filterToAccount(acct) {
 // ══════════════════════════════════════════════════════════════════
 // MONEY FLOW — Sankey diagram
 // ══════════════════════════════════════════════════════════════════
+// Custom SVG Sankey — no third-party Sankey library, drawn with cubic-bezier paths.
+//
+// Layout: 3 columns
+//   Left column  — income source nodes (one per category key, e.g. "Salary")
+//   Center column — single "Budget" node spanning full income height
+//   Right column  — expense destination nodes (full account path, top 15 + Other)
+//                   plus a synthetic "Savings" node if income > expenses
+//
+// Ribbon sizing: each ribbon height is proportional to its amount using a shared
+// scale factor computed to fit both the income column and expense column within
+// availH without overflow. ribbonD() draws a cubic-bezier quadrilateral (4 control
+// points) connecting two vertical rectangles.
+//
+// Interactivity: mouseenter on ribbons dims all others to 0.1 opacity; node hover
+// shows a tooltip. Expense node click (via filterToAccount) is not wired here —
+// that would require navigating to the Transactions panel.
 function renderSankey() {
   const txs=filteredTxs();
 
@@ -1861,6 +2061,9 @@ function renderSankey() {
   });
 }
 
+// Draws a filled ribbon (quadrilateral with bezier sides) from a source rect to a dest rect.
+// (x1,y1t,h1) = left edge x, top y, height; (x2,y2t,h2) = right edge x, top y, height.
+// Uses horizontal midpoint as cubic-bezier control-point x for a smooth S-curve.
 function ribbonD(x1,y1t,h1,x2,y2t,h2){
   const mx=(x1+x2)/2;
   return `M${x1},${y1t} C${mx},${y1t} ${mx},${y2t} ${x2},${y2t} L${x2},${y2t+h2} C${mx},${y2t+h2} ${mx},${y1t+h1} ${x1},${y1t+h1} Z`;
@@ -1869,6 +2072,10 @@ function ribbonD(x1,y1t,h1,x2,y2t,h2){
 // ══════════════════════════════════════════════════════════════════
 // ACCOUNT BALANCES
 // ══════════════════════════════════════════════════════════════════
+// Renders a balance snapshot for the filtered period: sums all postings in txs
+// (NOT full history) and groups results by account type using buildAcctRows().
+// Each row is clickable and calls filterToAccount() to jump to the Transactions
+// panel pre-filtered to that account. Income amounts are sign-flipped for display.
 function renderAccounts(txs) {
   const balances={};
   for(const tx of txs) for(const p of tx.postings) balances[p.account]=(balances[p.account]??0)+(p.amount??0);
@@ -1905,20 +2112,39 @@ function renderAccounts(txs) {
 // ══════════════════════════════════════════════════════════════════
 // TRANSACTIONS
 // ══════════════════════════════════════════════════════════════════
+// Receives period-filtered txs then applies two further in-memory filters:
+//   txAcctFilter  — keep only txs whose postings include the selected account
+//   txStatusFilter — keep only txs whose status matches 'cleared'/'pending'/'unmarked'
+// Both filters compose (AND). Postings for the highlighted account get the
+// tx-posting-hi CSS class. Cleared/pending transactions show a colored status badge.
 function renderTransactions(txs) {
-  // Apply account filter if set
-  const filtered = txAcctFilter
+  // Apply account filter: keep only transactions that touch the selected account
+  let filtered = txAcctFilter
     ? txs.filter(t => t.postings.some(p => p.account === txAcctFilter))
     : txs;
 
-  const filterNote = txAcctFilter ? ` · filtered: ${shortAcct(txAcctFilter)}` : '';
+  // Apply status filter: match 'cleared', 'pending', or 'unmarked'
+  if(txStatusFilter)
+    filtered = filtered.filter(t => t.status === txStatusFilter);
+
+  const filterParts = [];
+  if(txAcctFilter)   filterParts.push(shortAcct(txAcctFilter));
+  if(txStatusFilter) filterParts.push(txStatusFilter);
+  const filterNote = filterParts.length ? ` · ${filterParts.join(', ')}` : '';
   document.getElementById('tx-count-label').textContent =
     `${filtered.length.toLocaleString()} transaction${filtered.length!==1?'s':''} · ${periodLabel()}${filterNote}`;
 
   if(!filtered.length){
-    document.getElementById('transactions-table').innerHTML=`<div class="empty-state"><div class="em-icon">📭</div>No transactions${txAcctFilter?' for this account':''} in this period.<br><small>Use the ‹ › arrows to navigate or clear the filter.</small></div>`;
+    document.getElementById('transactions-table').innerHTML=`<div class="empty-state"><div class="em-icon">📭</div>No transactions match the current filters.<br><small>Use the ‹ › arrows to navigate or clear the filters.</small></div>`;
     return;
   }
+
+  // Status badge helper — renders a small colored circle for cleared/pending
+  const statusBadge = tx => {
+    if(tx.status==='cleared') return `<span class="tx-status tx-status-cleared" title="Cleared (*)">✓</span>`;
+    if(tx.status==='pending') return `<span class="tx-status tx-status-pending" title="Pending (!)">!</span>`;
+    return ''; // unmarked — no badge
+  };
 
   let html=`<table><thead><tr><th>Date</th><th>Description</th><th>Postings</th></tr></thead><tbody>`;
   for(const tx of [...filtered].reverse()){
@@ -1926,7 +2152,7 @@ function renderTransactions(txs) {
       const highlight = txAcctFilter && p.account===txAcctFilter;
       return `<div class="tx-posting${highlight?' tx-posting-hi':''}"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount??0)<0?'c-red':'c-slate'}">${p.amountStr??'—'}</span></div>`;
     }).join('');
-    html+=`<tr><td style="white-space:nowrap;font-size:12px;color:#64748b">${tx.date}</td><td style="font-weight:500;min-width:140px">${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
+    html+=`<tr><td style="white-space:nowrap;font-size:12px;color:var(--text-3)">${tx.date}</td><td style="font-weight:500;min-width:140px">${statusBadge(tx)}${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
   }
   html+=`</tbody></table>`;
   document.getElementById('transactions-table').innerHTML=html;
@@ -1936,7 +2162,8 @@ function renderTransactions(txs) {
 // BALANCE LOOKUP
 // ══════════════════════════════════════════════════════════════════
 
-// Exact running balances as of a given date string (YYYY-MM-DD)
+// Returns a map of {account → running balance} by summing all transactions up to
+// and including dateStr_ (relies on allTransactions being sorted — breaks early).
 function computeBalancesAsOf(dateStr_) {
   const bal={};
   for(const tx of allTransactions){
@@ -1946,9 +2173,12 @@ function computeBalancesAsOf(dateStr_) {
   return bal;
 }
 
-// Returns {balances, projected, daysAhead, lastKnownDate}
-// For future dates: extrapolates each asset/liability account using
-// the average daily change over the 90 days before the last transaction.
+// Returns {balances, projected, daysAhead, lastKnownDate}.
+// For past/present dates: delegates to computeBalancesAsOf() — exact figures.
+// For future dates: takes the last-known balances as base, computes each
+// asset/liability account's average daily change over the 90 days prior to
+// the last transaction, then scales that rate by daysAhead. Income/expense
+// accounts are NOT projected (they reset each period, not cumulative).
 function computeProjectedBalances(targetDateStr) {
   const lastDate = allTransactions[allTransactions.length-1]?.date;
   if(!lastDate || targetDateStr<=lastDate){
@@ -2024,6 +2254,11 @@ function setLookupPreset(preset){
   renderLookup();
 }
 
+// Balance Lookup panel renderer.
+// Past/present date: shows exact balances from computeBalancesAsOf().
+// Future date: shows projected balances with a warning banner; deltas are
+// shown vs. today's actual balances so the user can see the expected change.
+// Two sub-views: single account (history table) or net worth (asset/liability breakdown).
 function renderLookup(){
   const dateVal=document.getElementById('lk-date').value;
   if(!dateVal||!allTransactions.length){
@@ -2170,8 +2405,13 @@ function formatDisplayDate(dateStr_){
 // ══════════════════════════════════════════════════════════════════
 // EXPORT
 // ══════════════════════════════════════════════════════════════════
+// PDF export: triggers window.print() — the print CSS hides the sidebar/controls.
 function exportPDF(){ window.print(); }
 
+// PNG export: uses html2canvas to capture the active report panel at 2× scale.
+// The .content div's overflow is temporarily set to 'visible' so html2canvas can
+// see the full panel height (not just the scrollport). The captured canvas is then
+// composited onto a padded canvas with a white rounded-rect shadow before download.
 async function exportPNG(){
   const btn = event.currentTarget;
   const active = document.querySelector('.report-panel.active');
@@ -2240,6 +2480,8 @@ async function exportPNG(){
 // ══════════════════════════════════════════════════════════════════
 // SAMPLE DATA
 // ══════════════════════════════════════════════════════════════════
+// Generates ~16 months of synthetic hledger journal text for demo/testing.
+// All amounts are randomised on each call — not reproducible by design.
 function loadSampleData(){
   document.getElementById('filename-display').textContent='sample.ledger';
   initDashboard(generateSample());
