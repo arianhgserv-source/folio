@@ -70,7 +70,7 @@ Switch between **Week, Month, Quarter, Year**, and **All Time** views with a sin
 
 ## Getting Started
 
-**Quick Start:** You can use Folio by simply [visiting this link!](https://arianhgserv-source.github.io/folio/) Remember, this is a browser based application- your data never leaves your machine.\
+**Quick Start:** You can use Folio by simply [visiting this link!](https://arianhgserv-source.github.io/folio/) Remember, this is application runs entirely in your browser- your data never leaves your machine.
 
 **Offline or Downloaded Files:** Just open `index.html` directly in any modern browser (Chrome, Firefox, Safari, Edge). No server required.
 
