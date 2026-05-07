@@ -36,7 +36,7 @@ An interactive SVG Sankey diagram tracing money from income sources through a ce
 
 A month-grid or week-grid view of daily financial activity. Each day cell shows a net-worth change chip (green/red) plus asset and liability deltas. Click any day to expand a drawer with detailed stat cards and a full transaction list for that date. The **week view** shows individual transaction descriptions directly in each day cell. The calendar has its own navigation controls and is completely independent of the global period filter.
 
-![Calendar View](![Calendar-View-Folio-Screenshots](https://i.imgur.com/zTMaLgB.png))
+![Calendar View](https://i.imgur.com/zTMaLgB.png)
 
 ### 🔍 Balance Lookup
 
@@ -48,7 +48,7 @@ Enter any date — past or future — to see exact account balances as of that m
 
 A full ledger of every account in the selected period with current balance, a color-coded gain/loss indicator, and a trend arrow. Click any account row to jump directly to the Transactions panel pre-filtered to that account.
 
-![Account Ledgers](![Account-Balance-View-Folio-Screenshots](https://i.imgur.com/hQVqjoy.png))
+![Account Ledgers](https://i.imgur.com/hQVqjoy.png)
 
 ### 📝 Transactions
 
