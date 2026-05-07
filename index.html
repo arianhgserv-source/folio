@@ -1122,7 +1122,19 @@ const fmt       = (n,d=2)=>n==null?'—':Math.abs(n).toLocaleString('en-US',{min
 const fmtCurrency = n=>n==null?'—':(n<0?'-':'')+'$'+fmt(n);       // '$1,234.56' or '-$42.00'
 const fmtSign   = n=>`<span class="${n>=0?'c-green':'c-red'} td-m">${n<0?'(':''}$${fmt(Math.abs(n))}${n<0?')':''}</span>`; // colored HTML with accounting parens for negatives
 const tkAxis    = v=>'$'+(Math.abs(v)>=1000?(v/1000).toFixed(1)+'k':v); // Chart.js axis tick: compact '$1.2k'
-const fmtK      = v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0); // compact number for Sankey labels
+// Compact number formatter used for calendar tiles and Sankey labels.
+// Uses Math.round on integer-scaled values (e.g. round to nearest $100 before
+// dividing by 1000) rather than calling .toFixed() directly on a float.
+// Reason: values like 38150/1000 = 38.15 are represented in binary float as
+// 38.1499999..., so .toFixed(1) rounds them DOWN ("38.1") when they should
+// round UP ("38.2"). Integer-first rounding eliminates this class of bug and
+// keeps displayed A - L consistent with displayed NW on calendar tiles.
+const fmtK = v => {
+  const a = Math.abs(v), s = v < 0 ? '-' : '';
+  if(a >= 1e6)  return s + (Math.round(a / 1e5)  / 10).toFixed(1) + 'M';
+  if(a >= 1000) return s + (Math.round(a / 100)  / 10).toFixed(1) + 'k';
+  return s + Math.round(a).toString();
+};
 
 // ─── Category colour palette ──────────────────────────────────────
 // CATEGORY_COLORS maps lowercase keyword → hex. getCategoryColor() strips
