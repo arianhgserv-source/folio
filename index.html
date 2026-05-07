@@ -1,0 +1,2207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Folio — hLedger Reader</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+/* ─── Reset ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+       background: #f1f5f9; color: #1e293b; min-height: 100vh; }
+
+/* ─── Upload Screen ──────────────────────────────────────────────── */
+#upload-screen { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+.upload-card { background:white; border-radius:20px; padding:52px 44px; text-align:center; max-width:460px; width:100%; box-shadow:0 4px 24px rgba(0,0,0,.08); }
+.upload-logo { width:50px; height:50px; background:#eef2ff; border-radius:14px; display:flex; align-items:center; justify-content:center; margin:0 auto 18px; }
+.upload-card h1 { font-size:26px; font-weight:700; }
+.upload-card > p { color:#64748b; font-size:15px; margin:8px 0 26px; }
+.drop-zone { border:2px dashed #cbd5e1; border-radius:14px; padding:32px 20px; cursor:pointer; transition:border-color .2s, background .2s; }
+.drop-zone:hover, .drop-zone.dragover { border-color:#6366f1; background:#eef2ff; }
+.drop-zone p { color:#64748b; font-size:14px; line-height:1.5; }
+.drop-zone strong { color:#6366f1; }
+.dz-hint { font-size:12px; color:#94a3b8; margin-top:4px; }
+#file-input { display:none; }
+.upload-footer { margin-top:16px; font-size:13px; color:#94a3b8; }
+.sample-btn { background:none; border:none; color:#6366f1; font-size:13px; cursor:pointer; text-decoration:underline; padding:0; margin-top:10px; }
+
+/* ─── Buttons ────────────────────────────────────────────────────── */
+.btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:7px; border:none; cursor:pointer; font-size:13px; font-weight:500; transition:all .15s; white-space:nowrap; }
+.btn-ghost { background:transparent; color:#475569; border:1px solid #e2e8f0; }
+.btn-ghost:hover { background:#f8fafc; border-color:#cbd5e1; }
+.btn-danger { background:transparent; color:#ef4444; border:1px solid #fecaca; }
+.btn-danger:hover { background:#fef2f2; }
+
+/* ─── Dashboard Shell ────────────────────────────────────────────── */
+#dashboard { display:none; flex-direction:column; height:100vh; overflow:hidden; }
+
+/* ── Top bar ── */
+.topbar { background:white; border-bottom:1px solid #e2e8f0; padding:8px 18px; display:flex; align-items:center; gap:10px; flex-shrink:0; flex-wrap:wrap; }
+.topbar-logo { display:flex; align-items:center; gap:7px; font-weight:700; font-size:15px; color:#1e293b; margin-right:6px; }
+.topbar-logo span { color:#6366f1; }
+.filename-chip { font-size:12px; color:#64748b; background:#f1f5f9; padding:3px 10px; border-radius:20px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.topbar-spacer { flex:1; min-width:8px; }
+
+/* ── Period selector ── */
+.period-ctrl { display:flex; align-items:center; gap:8px; }
+.ptype-tabs { display:flex; background:#f1f5f9; border-radius:8px; padding:2px; gap:1px; }
+.ptab { background:none; border:none; padding:5px 10px; border-radius:6px; font-size:12px; font-weight:500; color:#64748b; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.ptab.active { background:white; color:#6366f1; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+.ptab:hover:not(.active) { color:#1e293b; }
+.pnav { display:flex; align-items:center; gap:4px; }
+.pnav-btn { background:none; border:1px solid #e2e8f0; border-radius:6px; width:28px; height:28px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#475569; font-size:16px; line-height:1; transition:all .15s; }
+.pnav-btn:hover { background:#f1f5f9; border-color:#cbd5e1; }
+.pnav-btn:disabled { opacity:.3; cursor:default; }
+.pnav-label { font-size:13px; font-weight:600; color:#1e293b; min-width:120px; text-align:center; white-space:nowrap; }
+
+.export-btns { display:flex; gap:6px; }
+
+/* ─── Main layout ────────────────────────────────────────────────── */
+.main-layout { display:flex; flex:1; overflow:hidden; }
+
+/* ── Sidebar ── */
+.sidebar { width:206px; background:#1e293b; flex-shrink:0; display:flex; flex-direction:column; overflow-y:auto; padding:14px 9px; }
+.sidebar-label { font-size:10px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.1em; padding:12px 10px 5px; }
+.sidebar-label:first-child { padding-top:0; }
+.nav-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; color:#94a3b8; font-size:13px; cursor:pointer; transition:all .15s; margin-bottom:1px; user-select:none; }
+.nav-item:hover { background:rgba(255,255,255,.07); color:#cbd5e1; }
+.nav-item.active { background:#6366f1; color:white; font-weight:500; }
+.nav-item svg { flex-shrink:0; width:15px; height:15px; }
+
+/* ── Content ── */
+.content { flex:1; overflow-y:auto; padding:24px 26px; }
+.report-panel { display:none; }
+.report-panel.active { display:block; }
+.report-header { margin-bottom:20px; }
+.report-header h2 { font-size:21px; font-weight:700; letter-spacing:-.3px; }
+.report-header p { color:#64748b; font-size:13px; margin-top:3px; }
+
+/* ─── Stat cards ─────────────────────────────────────────────────── */
+.stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
+.stat-card { background:white; border-radius:11px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid #f1f5f9; }
+.sc-label { font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.07em; }
+.sc-value { font-size:23px; font-weight:700; margin-top:5px; letter-spacing:-.5px; line-height:1.1; }
+.sc-sub { font-size:12px; margin-top:3px; color:#94a3b8; }
+
+/* ─── Chart cards ────────────────────────────────────────────────── */
+.chart-card { background:white; border-radius:11px; padding:20px 22px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid #f1f5f9; margin-bottom:18px; }
+.chart-card-hdr { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:16px; }
+.chart-card h3 { font-size:13.5px; font-weight:600; }
+.chart-card p { font-size:12px; color:#94a3b8; margin-top:2px; }
+.chart-wrap { position:relative; }
+.two-cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px; }
+@media (max-width:780px) { .two-cols { grid-template-columns:1fr; } }
+
+/* ─── Tables ─────────────────────────────────────────────────────── */
+.table-card { background:white; border-radius:11px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid #f1f5f9; overflow:hidden; margin-bottom:18px; }
+.tc-hdr { padding:16px 22px 0; }
+.tc-hdr h3 { font-size:13.5px; font-weight:600; }
+.tc-hdr p  { font-size:12px; color:#94a3b8; margin-top:2px; }
+table { width:100%; border-collapse:collapse; }
+thead th { font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.06em; padding:9px 22px; border-bottom:1px solid #f1f5f9; text-align:left; white-space:nowrap; }
+thead th.r { text-align:right; }
+tbody td { padding:10px 22px; border-bottom:1px solid #f8fafc; font-size:13px; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover td { background:#fafbff; }
+.td-i { padding-left:36px !important; color:#475569; }
+.td-r { text-align:right; }
+.td-m { font-variant-numeric:tabular-nums; font-weight:600; }
+.row-section td { font-size:10.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; padding:8px 22px; background:#f8fafc; border-top:1px solid #f1f5f9; border-bottom:1px solid #f1f5f9; }
+.row-sub td { font-weight:600; background:#f8fafc; }
+.row-total td { font-weight:700; background:#f1f5f9; border-top:2px solid #e2e8f0; }
+
+/* ─── Period matrix ──────────────────────────────────────────────── */
+.matrix-wrap { overflow-x:auto; padding-bottom:4px; }
+.matrix-wrap table { min-width:max-content; }
+.matrix-wrap thead th { background:white; position:sticky; top:0; z-index:2; }
+.matrix-wrap thead th:first-child { position:sticky; left:0; z-index:3; background:white; min-width:200px; }
+.matrix-wrap tbody td:first-child { position:sticky; left:0; background:white; z-index:1; font-size:12px; color:#475569; min-width:200px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.matrix-wrap tbody tr:hover td:first-child { background:#fafbff; }
+.pm-cell { text-align:right; padding:8px 14px; font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.pm-cell.em { color:#cbd5e1; }
+.pm-total { font-weight:700; border-left:2px solid #e2e8f0; }
+.matrix-section-hdr td { font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; padding:6px 14px; background:#f8fafc !important; border-top:1px solid #f1f5f9; }
+.matrix-section-hdr td:first-child { left:0; z-index:1; }
+.matrix-group-hdr td { font-size:11.5px; font-weight:600; color:#94a3b8; background:#fafbff !important; padding:5px 14px 5px 26px; border-top:1px solid #f8fafc; }
+.matrix-group-hdr td:first-child { left:0; z-index:1; }
+
+/* ─── Color utilities ────────────────────────────────────────────── */
+.c-green  { color:#16a34a; }
+.c-red    { color:#dc2626; }
+.c-blue   { color:#2563eb; }
+.c-indigo { color:#6366f1; }
+.c-slate  { color:#64748b; }
+.bg-none  { background:transparent !important; }
+
+/* ─── Empty state ────────────────────────────────────────────────── */
+.empty-state { text-align:center; padding:48px 20px; color:#94a3b8; font-size:14px; }
+.empty-state .em-icon { font-size:32px; margin-bottom:8px; }
+
+/* ─── Tx postings ────────────────────────────────────────────────── */
+.tx-postings { display:flex; flex-direction:column; gap:2px; }
+.tx-posting { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:#64748b; }
+.tx-posting-hi { background:#eef2ff; border-radius:4px; padding:1px 5px; margin:-1px -5px; color:#4338ca; font-weight:600; }
+.acct-row:hover td { background:#fafbff !important; }
+.acct-row:hover .c-green { color:#15803d; }
+.acct-row:hover .c-red   { color:#b91c1c; }
+
+/* ─── Balance Lookup ─────────────────────────────────────────────── */
+.lk-controls { display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap; padding:18px 20px; background:white; border-radius:11px; border:1px solid #f1f5f9; box-shadow:0 1px 3px rgba(0,0,0,.05); margin-bottom:18px; }
+.lk-field { display:flex; flex-direction:column; gap:5px; }
+.lk-label { font-size:10.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.07em; }
+.lk-date-input { border:1px solid #e2e8f0; border-radius:7px; padding:7px 11px; font-size:14px; color:#1e293b; outline:none; cursor:pointer; font-family:inherit; }
+.lk-date-input:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+.lk-select { border:1px solid #e2e8f0; border-radius:7px; padding:7px 11px; font-size:13.5px; color:#1e293b; outline:none; background:white; cursor:pointer; min-width:200px; font-family:inherit; }
+.lk-select:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+.lk-presets { display:flex; gap:6px; flex-wrap:wrap; }
+.lk-preset { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:6px 11px; font-size:12px; font-weight:500; color:#475569; cursor:pointer; transition:all .15s; white-space:nowrap; font-family:inherit; }
+.lk-preset:hover { background:#e8edf5; border-color:#cbd5e1; color:#1e293b; }
+
+/* Net worth hero card */
+.lk-hero { background:white; border-radius:12px; padding:24px 28px; border:1px solid #f1f5f9; box-shadow:0 1px 3px rgba(0,0,0,.05); margin-bottom:18px; }
+.lk-hero-top { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.lk-hero-lbl { font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; }
+.lk-hero-val { font-size:38px; font-weight:800; letter-spacing:-1px; line-height:1.05; margin-top:6px; }
+.lk-hero-delta { font-size:13px; margin-top:6px; font-weight:500; }
+.lk-hero-stats { display:flex; gap:24px; flex-wrap:wrap; padding-top:16px; border-top:1px solid #f1f5f9; }
+.lk-hero-stat { }
+.lk-hero-stat .h-lbl { font-size:11px; color:#94a3b8; font-weight:500; }
+.lk-hero-stat .h-val { font-size:18px; font-weight:700; margin-top:2px; }
+
+/* Projection banner */
+.lk-proj-banner { display:flex; align-items:center; gap:10px; padding:11px 16px; background:#fffbeb; border:1px solid #fde68a; border-radius:9px; font-size:13px; color:#78350f; margin-bottom:16px; }
+.lk-proj-banner svg { flex-shrink:0; }
+
+/* Account breakdown grids */
+.lk-breakdown { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px; }
+@media (max-width:680px) { .lk-breakdown { grid-template-columns:1fr; } }
+.lk-section { background:white; border-radius:11px; border:1px solid #f1f5f9; box-shadow:0 1px 3px rgba(0,0,0,.05); overflow:hidden; }
+.lk-section-hdr { padding:12px 18px; font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; background:#f8fafc; border-bottom:1px solid #f1f5f9; }
+.lk-row { display:flex; justify-content:space-between; align-items:baseline; padding:9px 18px; border-bottom:1px solid #f8fafc; font-size:13px; gap:12px; }
+.lk-row:last-child { border-bottom:none; }
+.lk-row-name { color:#475569; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lk-row-name.indent { padding-left:14px; color:#64748b; }
+.lk-row-val { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+.lk-row-group { padding:6px 18px 4px; font-size:11px; font-weight:600; color:#94a3b8; background:#fafbff; border-bottom:1px solid #f8fafc; }
+.lk-row-total { padding:10px 18px; font-weight:700; border-top:2px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; font-size:13px; }
+
+/* History table inside single-account view */
+.lk-history { background:white; border-radius:11px; border:1px solid #f1f5f9; box-shadow:0 1px 3px rgba(0,0,0,.05); overflow:hidden; margin-bottom:18px; }
+.lk-history-hdr { padding:14px 20px 0; font-size:13.5px; font-weight:600; }
+
+/* ─── Cash Flow account filter ──────────────────────────────────── */
+.cf-filter-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.cf-filter-bar label { font-size:12px; font-weight:600; color:#64748b; white-space:nowrap; }
+.cf-filter-select { border:1px solid #e2e8f0; border-radius:7px; padding:5px 10px; font-size:13px; color:#1e293b; outline:none; background:white; cursor:pointer; min-width:210px; font-family:inherit; }
+.cf-filter-select:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+
+/* ─── Sankey / Money Flow ────────────────────────────────────────── */
+.sankey-card { background:white; border-radius:11px; padding:24px 22px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid #f1f5f9; margin-bottom:18px; }
+.sankey-card h3 { font-size:13.5px; font-weight:600; margin-bottom:3px; }
+.sankey-card > p { font-size:12px; color:#94a3b8; margin-bottom:16px; }
+#sankey-svg { width:100%; display:block; overflow:visible; }
+.sk-ribbon { transition:opacity .12s; cursor:pointer; }
+.sk-node   { cursor:pointer; }
+
+/* ─── Sankey tooltip ─────────────────────────────────────────────── */
+#sankey-tooltip { display:none; position:fixed; z-index:9999; background:#1e293b; color:white;
+  border-radius:9px; padding:10px 14px; pointer-events:none;
+  box-shadow:0 6px 20px rgba(0,0,0,.25); min-width:150px; max-width:240px; }
+.sk-tt-name { font-size:12.5px; font-weight:600; margin-bottom:5px; line-height:1.3; }
+.sk-tt-full { font-size:10.5px; color:#94a3b8; margin-bottom:5px; font-family:ui-monospace,monospace; word-break:break-all; }
+.sk-tt-sub  { font-size:11px; color:#94a3b8; margin-bottom:4px; }
+.sk-tt-val  { font-size:16px; font-weight:700; color:#a5f3fc; }
+.sk-tt-pct  { font-size:11px; color:#64748b; margin-top:2px; }
+
+/* ─── Calendar View ─────────────────────────────────────────────── */
+.cal-nav { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+.cal-nav-btn { background:none; border:1px solid #e2e8f0; border-radius:6px; width:30px; height:30px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#475569; font-size:17px; line-height:1; transition:all .15s; }
+.cal-nav-btn:hover { background:#f1f5f9; }
+.cal-month-label { font-size:17px; font-weight:700; letter-spacing:-.3px; min-width:160px; }
+.cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+.cal-dow { text-align:center; font-size:10.5px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.06em; padding:4px 0; }
+.cal-cell { background:white; border:1px solid #f1f5f9; border-radius:9px; min-height:100px; padding:8px 9px; box-shadow:0 1px 2px rgba(0,0,0,.04); display:flex; flex-direction:column; gap:3px; cursor:default; transition:border-color .12s, box-shadow .12s; }
+.cal-cell.has-tx { cursor:pointer; }
+.cal-cell.has-tx:hover { border-color:#6366f1; box-shadow:0 2px 8px rgba(99,102,241,.15); }
+.cal-cell.empty { background:#f8fafc; box-shadow:none; border-color:transparent; }
+.cal-cell.today { border-color:#6366f1 !important; box-shadow:0 0 0 2px rgba(99,102,241,.18); }
+.cal-day-num { font-size:12px; font-weight:700; color:#94a3b8; line-height:1; }
+.cal-cell.today .cal-day-num { color:#6366f1; }
+.cal-cell.has-tx .cal-day-num { color:#1e293b; }
+.cal-nw-chip { font-size:11px; font-weight:700; border-radius:4px; padding:2px 5px; margin-top:2px; align-self:flex-start; }
+.cal-nw-chip.pos { background:#dcfce7; color:#16a34a; }
+.cal-nw-chip.neg { background:#fee2e2; color:#dc2626; }
+.cal-detail-row { display:flex; justify-content:space-between; font-size:10px; color:#64748b; }
+.cal-detail-row span:last-child { font-weight:600; }
+.cal-detail-row.pos span:last-child { color:#16a34a; }
+.cal-detail-row.neg span:last-child { color:#dc2626; }
+
+/* Calendar detail drawer */
+.cal-drawer { background:white; border-radius:11px; padding:20px 22px; border:1px solid #f1f5f9; box-shadow:0 2px 8px rgba(0,0,0,.07); margin-top:18px; }
+.cal-drawer h3 { font-size:14px; font-weight:700; margin-bottom:14px; color:#1e293b; }
+.cal-drawer-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+@media(max-width:600px){ .cal-drawer-grid { grid-template-columns:1fr 1fr; } }
+
+/* ─── Data-tip tooltips ──────────────────────────────────────────── */
+/* Base: shared chrome */
+[data-tip] { position:relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e293b;
+  color: white;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  padding: 6px 11px;
+  border-radius: 7px;
+  white-space: normal;
+  width: max-content;
+  max-width: 180px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 9999;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  transition: opacity .15s .1s;
+  text-align: center;
+}
+[data-tip]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 9999;
+  transition: opacity .15s .1s;
+}
+[data-tip]:hover::after, [data-tip]:hover::before { opacity: 1; }
+
+/* Default direction: ABOVE the element */
+[data-tip]::after  { bottom: calc(100% + 8px); top: auto; }
+[data-tip]::before { bottom: calc(100% + 3px); top: auto; border-top-color: #1e293b; border-bottom-color: transparent; }
+
+/* Topbar + cal-nav: BELOW (these sit near the top of the viewport) */
+.topbar [data-tip]::after,
+.cal-nav [data-tip]::after  { top: calc(100% + 8px); bottom: auto; }
+.topbar [data-tip]::before,
+.cal-nav [data-tip]::before { top: calc(100% + 3px); bottom: auto; border-bottom-color: #1e293b; border-top-color: transparent; }
+
+/* Left-edge elements: align tooltip to the left so it doesn't bleed off-screen */
+.ptype-tabs .ptab:first-child[data-tip]::after,
+.cal-view-tabs .ptab:first-child[data-tip]::after { left: 0; transform: none; }
+.ptype-tabs .ptab:first-child[data-tip]::before,
+.cal-view-tabs .ptab:first-child[data-tip]::before { left: 12px; transform: none; }
+
+/* Right-edge elements: align tooltip to the right */
+.export-btns .btn:last-child[data-tip]::after { left: auto; right: 0; transform: none; }
+.export-btns .btn:last-child[data-tip]::before { left: auto; right: 12px; transform: none; }
+
+/* ─── Calendar week view ─────────────────────────────────────────── */
+.cal-cell-week { min-height:160px; }
+.cal-week-txs { margin-top:5px; display:flex; flex-direction:column; gap:3px; overflow:hidden; }
+.cal-week-tx { font-size:10.5px; color:#475569; background:#f1f5f9; border-radius:3px; padding:2px 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cal-week-tx-more { font-size:10px; color:#94a3b8; padding:1px 4px; }
+.cal-view-tabs { display:flex; background:#f1f5f9; border-radius:8px; padding:2px; gap:1px; margin-left:auto; }
+
+/* ─── Print ──────────────────────────────────────────────────────── */
+@media print {
+  .topbar, .sidebar, .export-btns, .period-ctrl { display:none !important; }
+  #dashboard { display:block !important; height:auto; overflow:visible; }
+  .main-layout { display:block; }
+  .content { padding:0; overflow:visible; }
+  .report-panel { display:block !important; break-inside:avoid; margin-bottom:28px; }
+  .chart-card, .stat-card, .table-card { break-inside:avoid; }
+  body { background:white; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ UPLOAD ════════════════════════════════════════════════════ -->
+<div id="upload-screen">
+  <div class="upload-card">
+    <div class="upload-logo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+    </div>
+    <h1>Folio</h1>
+    <p style="color:#6366f1;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin:2px 0 14px">hLedger Reader</p>
+    <p>Open your <code>.ledger</code> file to explore income, expenses, net worth, and more.</p>
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 10px">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p><strong>Click to open</strong> or drag &amp; drop</p>
+      <p class="dz-hint">.ledger · .journal · .hledger · .txt</p>
+    </div>
+    <input type="file" id="file-input" accept=".ledger,.journal,.hledger,.txt">
+    <div style="margin-top:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;padding:11px 14px;display:flex;align-items:flex-start;gap:9px;text-align:left">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span style="font-size:12.5px;color:#166534;line-height:1.5"><strong>100% private.</strong> Your file is read entirely in your browser — nothing is uploaded to any server. Folio has no backend.</span>
+    </div>
+    <button class="sample-btn" onclick="loadSampleData()">No file? Try sample data →</button>
+  </div>
+</div>
+
+<!-- ═══ DASHBOARD ════════════════════════════════════════════════ -->
+<div id="dashboard">
+
+  <div class="topbar">
+    <div class="topbar-logo">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Folio <span>hLedger</span>
+    </div>
+    <span class="filename-chip" id="filename-display">—</span>
+    <div class="topbar-spacer"></div>
+
+    <!-- Period selector -->
+    <div class="period-ctrl">
+      <div class="ptype-tabs">
+        <button class="ptab" data-type="week"    onclick="setPeriodType('week')"    data-tip="View one week at a time">Wk</button>
+        <button class="ptab active" data-type="month" onclick="setPeriodType('month')" data-tip="View one month at a time">Mo</button>
+        <button class="ptab" data-type="quarter" onclick="setPeriodType('quarter')" data-tip="View one quarter at a time">Qtr</button>
+        <button class="ptab" data-type="year"    onclick="setPeriodType('year')"    data-tip="View one year at a time">Yr</button>
+        <button class="ptab" data-type="all"     onclick="setPeriodType('all')"     data-tip="View all transactions">All</button>
+      </div>
+      <div class="pnav">
+        <button class="pnav-btn" id="btn-prev" onclick="shiftPeriod(-1)">‹</button>
+        <span class="pnav-label" id="period-label">—</span>
+        <button class="pnav-btn" id="btn-next" onclick="shiftPeriod(1)">›</button>
+      </div>
+    </div>
+
+    <div class="export-btns">
+      <button class="btn btn-ghost" onclick="exportPNG()" data-tip="Save a PNG screenshot of the active panel">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>PNG
+      </button>
+      <button class="btn btn-ghost" onclick="exportPDF()" data-tip="Open the print dialog — choose 'Save as PDF' to export">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>PDF
+      </button>
+      <button class="btn btn-danger" onclick="resetUpload()" data-tip="Close this file and open a new one">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>New File
+      </button>
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <nav class="sidebar">
+      <div class="sidebar-label">Reports</div>
+      <div class="nav-item active" id="nav-income"       onclick="showPanel('income')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>Income Statement
+      </div>
+      <div class="nav-item" id="nav-cashflow"    onclick="showPanel('cashflow')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Cash Flow
+      </div>
+      <div class="nav-item" id="nav-networth"    onclick="showPanel('networth')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>Net Worth
+      </div>
+      <div class="nav-item" id="nav-sankey" onclick="showPanel('sankey')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h4v4H3zM17 3h4v4h-4zM3 17h4v4H3z"/><path d="M7 5h5a2 2 0 012 2v3M12 12v1a2 2 0 002 2h3M7 19h4"/></svg>Money Flow
+      </div>
+      <div class="nav-item" id="nav-calendar" onclick="showPanel('calendar')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Calendar
+      </div>
+      <div class="nav-item" id="nav-lookup" onclick="showPanel('lookup')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>Balance Lookup
+      </div>
+      <div class="sidebar-label">Data</div>
+      <div class="nav-item" id="nav-accounts"    onclick="showPanel('accounts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Account Balances
+      </div>
+      <div class="nav-item" id="nav-transactions" onclick="showPanel('transactions')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Transactions
+      </div>
+    </nav>
+
+    <main class="content" id="main-content">
+
+      <!-- ═══ Income Statement ══════════════════════════════════ -->
+      <div class="report-panel active" id="panel-income">
+        <div class="report-header">
+          <h2>Income Statement</h2>
+          <p id="income-period-desc">Selected period</p>
+        </div>
+        <div class="stats-row" id="income-stats"></div>
+        <div class="two-cols">
+          <div class="chart-card" style="margin-bottom:0">
+            <div class="chart-card-hdr"><div><h3>Income vs. Expenses</h3><p>Overall split</p></div></div>
+            <div class="chart-wrap" style="height:210px"><canvas id="income-donut"></canvas></div>
+          </div>
+          <div class="chart-card" style="margin-bottom:0">
+            <div class="chart-card-hdr"><div><h3>Top Expense Categories</h3><p>Largest spend buckets</p></div></div>
+            <div class="chart-wrap" style="height:210px"><canvas id="income-bar"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Period matrix -->
+        <div class="table-card">
+          <div class="tc-hdr" style="padding-bottom:12px">
+            <h3>Period Balance</h3>
+            <p id="matrix-desc">Accounts by sub-period — scroll right for more →</p>
+          </div>
+          <div class="matrix-wrap" id="matrix-wrap"></div>
+        </div>
+
+        <!-- Detail table -->
+        <div class="table-card" id="income-table"></div>
+      </div>
+
+      <!-- ═══ Cash Flow ════════════════════════════════════════ -->
+      <div class="report-panel" id="panel-cashflow">
+        <div class="report-header">
+          <h2>Cash Flow</h2>
+          <p id="cf-period-desc">Income vs. expenses by sub-period</p>
+        </div>
+        <div class="stats-row" id="cashflow-stats"></div>
+        <div class="chart-card">
+          <div class="chart-card-hdr">
+            <div><h3 id="cf-chart-title">Monthly Income &amp; Expenses</h3><p id="cf-chart-sub">Bar = income/expenses · Line = net cash flow</p></div>
+            <div class="cf-filter-bar">
+              <label for="cf-acct-filter">Account</label>
+              <select id="cf-acct-filter" class="cf-filter-select" onchange="renderCashFlow(filteredTxs())">
+                <option value="">All (Income vs Expenses)</option>
+              </select>
+            </div>
+          </div>
+          <div class="chart-wrap" style="height:300px"><canvas id="cashflow-chart"></canvas></div>
+        </div>
+        <div class="table-card" id="cashflow-table"></div>
+      </div>
+
+      <!-- ═══ Net Worth ════════════════════════════════════════ -->
+      <div class="report-panel" id="panel-networth">
+        <div class="report-header">
+          <h2>Net Worth Over Time</h2>
+          <p>Running total of assets minus liabilities (full history)</p>
+        </div>
+        <div class="stats-row" id="networth-stats"></div>
+        <div class="chart-card">
+          <div class="chart-card-hdr"><div><h3>Net Worth Trend</h3><p>Assets · Liabilities · Net Worth</p></div></div>
+          <div class="chart-wrap" style="height:300px"><canvas id="networth-chart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- ═══ Account Balances ══════════════════════════════════ -->
+      <div class="report-panel" id="panel-accounts">
+        <div class="report-header"><h2>Account Balances</h2><p>Current balance of every account in the period</p></div>
+        <div class="table-card" id="accounts-table"></div>
+      </div>
+
+      <!-- ═══ Transactions ═════════════════════════════════════ -->
+      <div class="report-panel" id="panel-transactions">
+        <div class="report-header"><h2>Transactions</h2><p id="tx-count-label">—</p></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+          <div class="cf-filter-bar">
+            <label for="tx-acct-filter">Account</label>
+            <select id="tx-acct-filter" class="cf-filter-select" onchange="applyTxFilter()">
+              <option value="">All accounts</option>
+            </select>
+          </div>
+          <button class="btn btn-ghost" id="tx-clear-btn" onclick="clearTxFilter()" style="display:none">✕ Clear filter</button>
+        </div>
+        <div class="table-card" id="transactions-table"></div>
+      </div>
+
+      <!-- ═══ Balance Lookup ════════════════════════════════════ -->
+      <div class="report-panel" id="panel-lookup">
+        <div class="report-header">
+          <h2>Balance Lookup</h2>
+          <p>Exact balances for any past date · forward projections for future dates</p>
+        </div>
+
+        <div class="lk-controls">
+          <div class="lk-field">
+            <label class="lk-label">Date</label>
+            <input type="date" id="lk-date" class="lk-date-input" onchange="renderLookup()">
+          </div>
+          <div class="lk-field">
+            <label class="lk-label">Account</label>
+            <select id="lk-acct" class="lk-select" onchange="renderLookup()">
+              <option value="">All accounts (net worth)</option>
+            </select>
+          </div>
+          <div class="lk-field">
+            <label class="lk-label">Jump to</label>
+            <div class="lk-presets">
+              <button class="lk-preset" onclick="setLookupPreset('today')" data-tip="Current balances">Today</button>
+              <button class="lk-preset" onclick="setLookupPreset('eom')"   data-tip="End of this month">End of Mo</button>
+              <button class="lk-preset" onclick="setLookupPreset('1m')"    data-tip="Project 1 month ahead">+1 Mo</button>
+              <button class="lk-preset" onclick="setLookupPreset('3m')"    data-tip="Project 3 months ahead">+3 Mo</button>
+              <button class="lk-preset" onclick="setLookupPreset('6m')"    data-tip="Project 6 months ahead">+6 Mo</button>
+              <button class="lk-preset" onclick="setLookupPreset('1y')"    data-tip="Project 1 year ahead">+1 Yr</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="lk-result"></div>
+      </div>
+
+      <!-- ═══ Money Flow (Sankey) ══════════════════════════════════ -->
+      <div class="report-panel" id="panel-sankey">
+        <div class="report-header">
+          <h2>Money Flow</h2>
+          <p id="sankey-period-desc">Income sources → expense categories</p>
+        </div>
+        <div class="stats-row" id="sankey-stats"></div>
+        <div class="sankey-card">
+          <h3>Income → Spending Breakdown</h3>
+          <p id="sankey-desc">Selected period</p>
+          <svg id="sankey-svg" viewBox="0 0 820 460" xmlns="http://www.w3.org/2000/svg" style="min-height:280px"></svg>
+        </div>
+      </div>
+      <div id="sankey-tooltip"></div>
+
+      <!-- ═══ Calendar View ══════════════════════════════════════ -->
+      <div class="report-panel" id="panel-calendar">
+        <div class="report-header">
+          <h2>Calendar</h2>
+          <p>Daily net worth, asset, and liability changes</p>
+        </div>
+        <div class="cal-nav">
+          <button class="cal-nav-btn" onclick="shiftCalPeriod(-1)">‹</button>
+          <span class="cal-month-label" id="cal-month-label">—</span>
+          <button class="cal-nav-btn" onclick="shiftCalPeriod(1)">›</button>
+          <button class="btn btn-ghost" style="margin-left:8px" onclick="calGoToday()" data-tip="Jump to today">Today</button>
+          <div class="cal-view-tabs">
+            <button class="ptab active" id="cal-tab-month" onclick="setCalView('month')" data-tip="Month grid view">Month</button>
+            <button class="ptab" id="cal-tab-week" onclick="setCalView('week')" data-tip="Week view with transaction details">Week</button>
+          </div>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+        <div id="cal-drawer"></div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ─── State ────────────────────────────────────────────────────────
+let allTransactions = [];
+let pType   = 'month';
+let pAnchor = new Date();
+let charts  = {};
+let calAnchor    = new Date(); // calendar month anchor
+let calView      = 'month';  // 'month' | 'week'
+let txAcctFilter = '';        // transactions panel account filter
+
+// ─── Date helpers ─────────────────────────────────────────────────
+const pad2    = n => String(n).padStart(2,'0');
+const dateStr = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const addDays = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+const addMo   = (d,n) => { const r=new Date(d); r.setMonth(r.getMonth()+n); return r; };
+const parseDt = s  => { const [y,m,d]=s.split('-'); return new Date(+y,+m-1,+d); };
+const moEnd   = (y,m) => new Date(y, m+1, 0); // last day of month (0-indexed m)
+
+function isoWeek(d) {
+  const r = new Date(d); r.setHours(0,0,0,0);
+  r.setDate(r.getDate()+3-(r.getDay()+6)%7);
+  const w1 = new Date(r.getFullYear(),0,4);
+  return 1+Math.round(((r-w1)/864e5-3+(w1.getDay()+6)%7)/7);
+}
+function weekMonday(d) {
+  const r=new Date(d), dow=r.getDay();
+  r.setDate(r.getDate()-(dow===0?6:dow-1));
+  return r;
+}
+
+// ─── Period management ────────────────────────────────────────────
+function getPeriodRange() {
+  const a=pAnchor, y=a.getFullYear(), m=a.getMonth(), d=a.getDate();
+  switch(pType) {
+    case 'week': {
+      const mon=weekMonday(a);
+      return { start:dateStr(mon), end:dateStr(addDays(mon,6)) };
+    }
+    case 'month':
+      return { start:`${y}-${pad2(m+1)}-01`, end:dateStr(moEnd(y,m)) };
+    case 'quarter': {
+      const q=Math.floor(m/3)*3;
+      return { start:`${y}-${pad2(q+1)}-01`, end:dateStr(moEnd(y,q+2)) };
+    }
+    case 'year':
+      return { start:`${y}-01-01`, end:`${y}-12-31` };
+    default: // all
+      return { start:'1900-01-01', end:'2999-12-31' };
+  }
+}
+
+function filteredTxs() {
+  const {start,end}=getPeriodRange();
+  return allTransactions.filter(t=>t.date>=start && t.date<=end);
+}
+
+function setPeriodType(type) {
+  pType=type;
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.toggle('active',b.dataset.type===type));
+  const nav=type!=='all';
+  document.getElementById('btn-prev').disabled=!nav;
+  document.getElementById('btn-next').disabled=!nav;
+  renderAll();
+}
+
+function shiftPeriod(dir) {
+  if(pType==='all') return;
+  const shifts={'week':7,'month':1,'quarter':3,'year':12};
+  if(pType==='week') pAnchor=addDays(pAnchor,dir*7);
+  else               pAnchor=addMo(pAnchor,dir*(shifts[pType]||1));
+  renderAll();
+}
+
+function periodLabel() {
+  const {start,end}=getPeriodRange(), a=pAnchor;
+  switch(pType) {
+    case 'week': {
+      const s=parseDt(start),e=parseDt(end);
+      const sm=s.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      const em=e.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      return `${sm} – ${em}`;
+    }
+    case 'month':   return a.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    case 'quarter': return `Q${Math.floor(a.getMonth()/3)+1} ${a.getFullYear()}`;
+    case 'year':    return String(a.getFullYear());
+    default:        return 'All Time';
+  }
+}
+
+// ─── Sub-period bucketing ─────────────────────────────────────────
+// Returns [{label, start, end}] for the current period.
+function getSubPeriods() {
+  const {start,end}=getPeriodRange();
+  const s=parseDt(start), e=parseDt(end);
+  const daysDiff = (e-s)/864e5;
+
+  if(pType==='week' || daysDiff<=13) return getDayBuckets(s,e);
+  if(pType==='month' || daysDiff<=95) return getWeekBuckets(s,e);
+  return getMonthBuckets(s,e);
+}
+
+function getDayBuckets(s,e) {
+  const out=[]; let cur=new Date(s);
+  while(cur<=e) {
+    const ds=dateStr(cur);
+    out.push({ label:cur.toLocaleDateString('en-US',{weekday:'short',month:'numeric',day:'numeric'}), start:ds, end:ds });
+    cur=addDays(cur,1);
+  }
+  return out;
+}
+
+function getWeekBuckets(s,e) {
+  const out=[]; let cur=weekMonday(s);
+  while(cur<=e) {
+    const wEnd=addDays(cur,6);
+    const rs=cur<s?s:cur, re=wEnd>e?e:wEnd;
+    out.push({ label:shortMDRange(rs,re), start:dateStr(rs), end:dateStr(re) });
+    cur=addDays(cur,7);
+  }
+  return out;
+}
+
+// "Apr 28–May 4" — omits repeated month when both ends share it
+function shortMDRange(s,e) {
+  const sf=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const ef=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const sStr=sf(s), eStr=ef(e);
+  // Same month: "Apr 28–May 4" or "May 5–11"
+  if(s.getMonth()===e.getMonth()&&s.getFullYear()===e.getFullYear())
+    return `${s.toLocaleDateString('en-US',{month:'short',day:'numeric'})}–${e.getDate()}`;
+  return `${sStr}–${eStr}`;
+}
+
+function getMonthBuckets(s,e) {
+  const out=[]; let cur=new Date(s.getFullYear(),s.getMonth(),1);
+  while(cur<=e) {
+    const me=moEnd(cur.getFullYear(),cur.getMonth());
+    const re=me>e?e:me;
+    out.push({ label:cur.toLocaleDateString('en-US',{month:'short',year:'2-digit'}), start:dateStr(cur), end:dateStr(re) });
+    cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);
+  }
+  return out;
+}
+
+// ─── File loading ─────────────────────────────────────────────────
+const dropZone=document.getElementById('drop-zone');
+const fileInput=document.getElementById('file-input');
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');const f=e.dataTransfer.files[0];if(f)loadFile(f);});
+fileInput.addEventListener('change',e=>{if(e.target.files[0])loadFile(e.target.files[0]);});
+
+function loadFile(file) {
+  document.getElementById('filename-display').textContent=file.name;
+  const r=new FileReader();
+  r.onload=e=>initDashboard(e.target.result);
+  r.readAsText(file);
+}
+
+function initDashboard(content) {
+  allTransactions=parseLedger(content);
+  if(allTransactions.length) {
+    pAnchor = parseDt(allTransactions[allTransactions.length-1].date);
+    calAnchor = new Date(pAnchor.getFullYear(), pAnchor.getMonth(), 1);
+  } else {
+    pAnchor = new Date();
+    calAnchor = new Date();
+  }
+  pType='month';
+  document.querySelectorAll('.ptab').forEach(b=>b.classList.toggle('active',b.dataset.type==='month'));
+  // Default lookup date to today
+  document.getElementById('lk-date').value=dateStr(new Date());
+  populateLookupAccounts();
+  populateCFAccounts();
+  populateTxAccounts();
+  txAcctFilter = '';
+  renderAll();
+  document.getElementById('upload-screen').style.display='none';
+  document.getElementById('dashboard').style.display='flex';
+}
+
+function resetUpload() {
+  document.getElementById('upload-screen').style.display='flex';
+  document.getElementById('dashboard').style.display='none';
+  fileInput.value='';
+  allTransactions=[];
+  Object.values(charts).forEach(c=>c.destroy());
+  charts={};
+  showPanel('income');
+}
+
+// ─── Ledger parser ────────────────────────────────────────────────
+function parseLedger(raw) {
+  const txList=[]; let cur=null;
+  for(const line of raw.split(/\r?\n/)) {
+    if(/^\s*[;#%|]/.test(line)) continue;
+    if(/^(account|commodity|include|alias|tag|year|bucket|D|P)\b/.test(line.trim())) continue;
+    const hdr=line.match(/^(\d{4}[\/\-]\d{2}[\/\-]\d{2})(?:\s*=\s*\S+)?\s*([*!])?\s*(.*)/);
+    if(hdr && !/^\s/.test(line)) {
+      if(cur) txList.push(cur);
+      cur={ date:hdr[1].replace(/\//g,'-'), cleared:hdr[2]==='*', description:hdr[3].replace(/\s*;.*$/,'').trim(), postings:[] };
+      continue;
+    }
+    if(cur && /^\s+\S/.test(line)) {
+      const t=line.trimStart().replace(/\s*;.*$/,'').trim(); if(!t) continue;
+      const sp=t.match(/^(.+?)(?:\s{2,}|\t)(\S.*)$/) ;
+      if(sp) { cur.postings.push({account:sp[1].trim(),amount:parseAmount(sp[2].trim()),amountStr:sp[2].trim()}); }
+      else   { cur.postings.push({account:t,amount:null,amountStr:null}); }
+    }
+  }
+  if(cur) txList.push(cur);
+  for(const tx of txList) {
+    const np=tx.postings.filter(p=>p.amount===null);
+    if(np.length===1){ const s=tx.postings.reduce((a,p)=>a+(p.amount??0),0); np[0].amount=-s; np[0].amountStr=fmtCurrency(-s); }
+  }
+  return txList.sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function parseAmount(str) {
+  if(!str) return null;
+  const neg=str.includes('-')||str.trimStart().startsWith('(');
+  const val=parseFloat(str.replace(/[^0-9.]/g,''));
+  return isNaN(val)?null:(neg?-val:val);
+}
+
+// ─── Account helpers ──────────────────────────────────────────────
+const isIncome    = a=>/^(income|revenue)/i.test(a);
+const isExpense   = a=>/^expense/i.test(a);
+const isAsset     = a=>/^asset/i.test(a);
+const isLiability = a=>/^liabilit/i.test(a);
+const isEquity    = a=>/^equity/i.test(a);
+function acctType(a){ return isIncome(a)?'income':isExpense(a)?'expense':isAsset(a)?'asset':isLiability(a)?'liability':isEquity(a)?'equity':'other'; }
+function shortAcct(a){ return a.split(':').pop()||a; }
+
+// Build display rows for a sorted list of same-type accounts.
+// Strips the top-level prefix (Expenses/Income), groups siblings that share
+// a parent segment under a lightweight header row, and indents leaf names.
+// Returns [{fullAcct, label, indent, isGroupHeader}]
+function buildAcctRows(accts) {
+  const withSegs = accts.map(a => ({ full:a, segs:a.split(':').slice(1) }));
+  const firstCount = {};
+  for(const{segs,full} of withSegs){
+    const k=segs[0]||full; firstCount[k]=(firstCount[k]||0)+1;
+  }
+  const rows=[], seen=new Set();
+  for(const{full,segs} of withSegs){
+    const firstSeg = segs[0]||full;
+    const grouped  = firstCount[firstSeg]>1;
+    if(grouped){
+      if(!seen.has(firstSeg)){
+        seen.add(firstSeg);
+        rows.push({fullAcct:null, label:firstSeg, indent:0, isGroupHeader:true});
+      }
+      const leaf = segs.length>1 ? segs.slice(1).join(':') : segs[0]||full;
+      rows.push({fullAcct:full, label:leaf, indent:1, isGroupHeader:false});
+    } else {
+      rows.push({fullAcct:full, label:firstSeg, indent:0, isGroupHeader:false});
+    }
+  }
+  return rows;
+}
+
+// ─── Formatting ───────────────────────────────────────────────────
+const fmt       = (n,d=2)=>n==null?'—':Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtCurrency = n=>n==null?'—':(n<0?'-':'')+'$'+fmt(n);
+const fmtSign   = n=>`<span class="${n>=0?'c-green':'c-red'} td-m">${n<0?'(':''}$${fmt(Math.abs(n))}${n<0?')':''}</span>`;
+const tkAxis    = v=>'$'+(Math.abs(v)>=1000?(v/1000).toFixed(1)+'k':v);
+const fmtK      = v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0);
+
+// ─── Category colour palette ──────────────────────────────────────
+const CATEGORY_COLORS = {
+  // Housing / shelter
+  housing:'#6366f1', rent:'#6366f1', mortgage:'#6366f1',
+  // Food
+  food:'#f59e0b', groceries:'#f59e0b', grocery:'#f59e0b',
+  dining:'#fb923c', restaurants:'#fb923c', restaurant:'#fb923c',
+  // Subscriptions / digital
+  subscriptions:'#8b5cf6', subscription:'#8b5cf6', streaming:'#8b5cf6',
+  // Health / fitness
+  health:'#10b981', medical:'#10b981', gym:'#34d399', fitness:'#34d399', healthcare:'#10b981',
+  // Transport
+  transportation:'#3b82f6', transport:'#3b82f6', auto:'#3b82f6', car:'#3b82f6', gas:'#60a5fa', transit:'#93c5fd',
+  // Entertainment / fun
+  entertainment:'#ec4899', fun:'#ec4899',
+  // Utilities
+  utilities:'#64748b', electric:'#64748b', water:'#94a3b8', internet:'#94a3b8', phone:'#cbd5e1',
+  // Education
+  education:'#06b6d4', school:'#06b6d4', tuition:'#06b6d4',
+  // Travel
+  travel:'#0ea5e9', vacation:'#0ea5e9', hotel:'#38bdf8',
+  // Shopping / clothing
+  shopping:'#f43f5e', clothing:'#f43f5e', clothes:'#f43f5e',
+  // Other expenses
+  insurance:'#475569', personal:'#a78bfa', beauty:'#f9a8d4',
+  // Income
+  salary:'#16a34a', wages:'#16a34a', payroll:'#16a34a',
+  freelance:'#22c55e', consulting:'#22c55e', contract:'#22c55e',
+  interest:'#4ade80', dividends:'#86efac', dividend:'#86efac',
+  rental:'#34d399', rent_income:'#34d399',
+  business:'#059669', bonus:'#65a30d', commission:'#84cc16',
+  savings:'#16a34a',
+};
+const FALLBACK_PALETTE = [
+  '#6366f1','#f59e0b','#10b981','#3b82f6','#ec4899',
+  '#8b5cf6','#f43f5e','#06b6d4','#fb923c','#0ea5e9',
+  '#a78bfa','#34d399','#64748b','#fbbf24','#4ade80',
+  '#f472b6','#38bdf8','#a3e635','#fb7185','#67e8f9',
+];
+
+function getCategoryColor(name) {
+  const key=(name||'').toLowerCase().replace(/[^a-z]/g,'');
+  if(CATEGORY_COLORS[key]) return CATEGORY_COLORS[key];
+  // Stable hash → consistent fallback color across renders
+  let h=0; for(const c of key) h=(h*31+c.charCodeAt(0))&0xffff;
+  return FALLBACK_PALETTE[h%FALLBACK_PALETTE.length];
+}
+function getCategoryColorRGBA(name, alpha) {
+  const hex=getCategoryColor(name);
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+// Second segment of "Expenses:Housing:Rent" → "Housing"
+function catKey(account) { const s=account.split(':'); return s.length>1?s[1]:s[0]; }
+
+// ══════════════════════════════════════════════════════════════════
+// CALENDAR VIEW
+// ══════════════════════════════════════════════════════════════════
+
+// Pre-compute a map of dateStr → {assetDelta, liabDelta, nwDelta, txCount}
+// by walking transactions once and tracking running balances.
+function buildDailyDeltas() {
+  // Group transactions by date first, then compute end-of-day snapshot
+  // and delta vs. end of previous day — avoids mid-day accumulation errors.
+  const byDate = {};
+  for(const tx of allTransactions){
+    if(!byDate[tx.date]) byDate[tx.date] = [];
+    byDate[tx.date].push(tx);
+  }
+
+  const map = {};
+  const bal = {};                       // running account balances
+  let prevAssets = 0, prevLiab = 0, prevNW = 0;
+
+  for(const ds of Object.keys(byDate).sort()){
+    // Apply all of this day's transactions to running balances
+    const txs = byDate[ds];
+    for(const tx of txs)
+      for(const p of tx.postings)
+        bal[p.account] = (bal[p.account]||0) + (p.amount??0);
+
+    // End-of-day totals
+    let assets = 0, liab = 0;
+    for(const [a,b] of Object.entries(bal)){
+      if(isAsset(a))     assets += b;
+      if(isLiability(a)) liab   += b;  // liabilities stored as negative numbers
+    }
+    const nw = assets + liab;
+
+    // Deltas vs. end of previous day
+    const assetDelta = assets - prevAssets;
+    const liabDelta  = -(liab - prevLiab); // positive = more debt (liab became more negative)
+    const nwDelta    = nw - prevNW;
+
+    map[ds] = {
+      assetDelta, liabDelta, nwDelta,
+      txCount : txs.length,
+      assetsEnd: assets,
+      liabEnd  : -liab,    // displayed as positive owed amount
+      nwEnd    : nw,
+    };
+
+    prevAssets = assets;
+    prevLiab   = liab;
+    prevNW     = nw;
+  }
+  return map;
+}
+
+function renderCalendar() {
+  const deltas = buildDailyDeltas();
+  const todayStr = dateStr(new Date());
+  if(calView === 'week') _renderCalWeek(deltas, todayStr);
+  else                   _renderCalMonth(deltas, todayStr);
+}
+
+function _renderCalMonth(deltas, todayStr) {
+  const y = calAnchor.getFullYear(), m = calAnchor.getMonth();
+  document.getElementById('cal-month-label').textContent =
+    new Date(y, m, 1).toLocaleDateString('en-US', {month:'long', year:'numeric'});
+
+  const firstDay = new Date(y, m, 1);
+  const lastDay  = new Date(y, m+1, 0);
+  const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
+
+  let html = '';
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => {
+    html += `<div class="cal-dow">${d}</div>`;
+  });
+
+  for(let i=0; i<startDow; i++) html += `<div class="cal-cell empty"></div>`;
+
+  for(let d=1; d<=lastDay.getDate(); d++) {
+    const ds = `${y}-${pad2(m+1)}-${pad2(d)}`;
+    const info = deltas[ds];
+    const isToday = ds === todayStr;
+    const hasTx = !!info;
+
+    let inner = `<div class="cal-day-num">${d}</div>`;
+    if(info) {
+      const nwDir  = info.nwDelta >= 0 ? 'pos' : 'neg';
+      const nwSign = info.nwDelta >= 0 ? '+' : '';
+      inner += `<div class="cal-nw-chip ${nwDir}">${nwSign}$${fmtK(Math.abs(info.nwDelta))}</div>`;
+      inner += `<div class="cal-detail-row ${info.assetDelta>=0?'pos':'neg'}"><span>Assets</span><span>${info.assetDelta>=0?'+':''}$${fmtK(Math.abs(info.assetDelta))}</span></div>`;
+      inner += `<div class="cal-detail-row ${info.liabDelta<=0?'pos':'neg'}"><span>Liab</span><span>${info.liabDelta>0?'+':''}$${fmtK(Math.abs(info.liabDelta))}</span></div>`;
+    }
+
+    html += `<div class="cal-cell ${hasTx?'has-tx':''} ${isToday?'today':''}"
+      ${hasTx?`onclick="calSelectDay('${ds}')" title="${info.txCount} transaction${info.txCount!==1?'s':''}"`:''}>
+      ${inner}</div>`;
+  }
+
+  const totalCells = startDow + lastDay.getDate();
+  const remainder  = totalCells % 7;
+  if(remainder) for(let i=remainder; i<7; i++) html += `<div class="cal-cell empty"></div>`;
+
+  document.getElementById('cal-grid').innerHTML = html;
+  document.getElementById('cal-drawer').innerHTML = '';
+}
+
+function _renderCalWeek(deltas, todayStr) {
+  const weekStart = weekMonday(calAnchor);
+  const weekEnd   = addDays(weekStart, 6);
+  const sm = weekStart.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const em = weekEnd.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  document.getElementById('cal-month-label').textContent = `${sm} – ${em}`;
+
+  let html = '';
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => {
+    html += `<div class="cal-dow">${d}</div>`;
+  });
+
+  for(let i=0; i<7; i++) {
+    const day = addDays(weekStart, i);
+    const ds  = dateStr(day);
+    const info = deltas[ds];
+    const isToday = ds === todayStr;
+    const hasTx = !!info;
+    const dayLabel = day.toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+    const dayTxs   = hasTx ? allTransactions.filter(t => t.date === ds) : [];
+
+    let inner = `<div class="cal-day-num">${dayLabel}</div>`;
+    if(info) {
+      const nwDir  = info.nwDelta >= 0 ? 'pos' : 'neg';
+      const nwSign = info.nwDelta >= 0 ? '+' : '';
+      inner += `<div class="cal-nw-chip ${nwDir}">${nwSign}$${fmtK(Math.abs(info.nwDelta))}</div>`;
+    }
+    if(dayTxs.length) {
+      inner += `<div class="cal-week-txs">`;
+      for(const tx of dayTxs.slice(0, 5))
+        inner += `<div class="cal-week-tx">${tx.description||'—'}</div>`;
+      if(dayTxs.length > 5)
+        inner += `<div class="cal-week-tx-more">+${dayTxs.length-5} more</div>`;
+      inner += `</div>`;
+    }
+
+    html += `<div class="cal-cell cal-cell-week ${hasTx?'has-tx':''} ${isToday?'today':''}"
+      ${hasTx?`onclick="calSelectDay('${ds}')"`:''}>
+      ${inner}</div>`;
+  }
+
+  document.getElementById('cal-grid').innerHTML = html;
+  document.getElementById('cal-drawer').innerHTML = '';
+}
+
+function setCalView(v) {
+  calView = v;
+  document.getElementById('cal-tab-month').classList.toggle('active', v==='month');
+  document.getElementById('cal-tab-week').classList.toggle('active',  v==='week');
+  if(v==='week') calAnchor = weekMonday(calAnchor);
+  renderCalendar();
+}
+
+function shiftCalPeriod(dir) {
+  if(calView === 'week')
+    calAnchor = addDays(calAnchor, dir * 7);
+  else
+    calAnchor = new Date(calAnchor.getFullYear(), calAnchor.getMonth() + dir, 1);
+  renderCalendar();
+}
+
+// Keep old name as alias so any lingering references don't break
+function shiftCalMonth(dir) { shiftCalPeriod(dir); }
+
+function calGoToday() {
+  calAnchor = new Date();
+  renderCalendar();
+}
+
+function calSelectDay(ds) {
+  const deltas = buildDailyDeltas();
+  const info = deltas[ds];
+  if(!info) return;
+
+  const dayTxs = allTransactions.filter(t => t.date === ds);
+  const displayDate = parseDt(ds).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+
+  // Running totals as of this date
+  const nwSign  = info.nwDelta  >= 0 ? '+' : '';
+  const astSign = info.assetDelta >= 0 ? '+' : '';
+  const labSign = info.liabDelta  > 0 ? '+' : '';
+
+  let html = `<div class="cal-drawer">
+    <h3>${displayDate}</h3>
+    <div class="cal-drawer-grid">
+      <div class="stat-card">
+        <div class="sc-label">Net Worth Change</div>
+        <div class="sc-value ${info.nwDelta>=0?'c-green':'c-red'}">${nwSign}$${fmt(Math.abs(info.nwDelta))}</div>
+        <div class="sc-sub">→ $${fmt(info.nwEnd)} total</div>
+      </div>
+      <div class="stat-card">
+        <div class="sc-label">Assets Change</div>
+        <div class="sc-value ${info.assetDelta>=0?'c-green':'c-red'}">${astSign}$${fmt(Math.abs(info.assetDelta))}</div>
+        <div class="sc-sub">→ $${fmt(info.assetsEnd)} total</div>
+      </div>
+      <div class="stat-card">
+        <div class="sc-label">Liabilities Change</div>
+        <div class="sc-value ${info.liabDelta<=0?'c-green':'c-red'}">${info.liabDelta>0?'+':''}$${fmt(Math.abs(info.liabDelta))}</div>
+        <div class="sc-sub">→ $${fmt(info.liabEnd)} total</div>
+      </div>
+    </div>`;
+
+  if(dayTxs.length) {
+    html += `<div class="tc-hdr" style="padding:0 0 10px"><h3>${dayTxs.length} Transaction${dayTxs.length!==1?'s':''}</h3></div>
+    <table><thead><tr><th>Description</th><th>Postings</th></tr></thead><tbody>`;
+    for(const tx of dayTxs) {
+      const ph = tx.postings.map(p =>
+        `<div class="tx-posting"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount??0)<0?'c-red':'c-slate'}">${p.amountStr??'—'}</span></div>`
+      ).join('');
+      html += `<tr><td style="font-weight:500;min-width:140px">${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  html += `</div>`;
+  document.getElementById('cal-drawer').innerHTML = html;
+
+  // Scroll drawer into view smoothly
+  document.getElementById('cal-drawer').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+// ─── Navigation ───────────────────────────────────────────────────
+function showPanel(name) {
+  document.querySelectorAll('.report-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  document.getElementById('nav-'+name).classList.add('active');
+  // Hide the global period selector on Calendar tab — it has its own nav
+  document.querySelector('.period-ctrl').style.display = (name==='calendar') ? 'none' : '';
+}
+function destroyChart(id){ if(charts[id]){charts[id].destroy();delete charts[id];} }
+
+// ─── Render orchestrator ──────────────────────────────────────────
+function renderAll() {
+  document.getElementById('period-label').textContent=periodLabel();
+  const txs=filteredTxs();
+  renderIncomeStatement(txs);
+  renderCashFlow(txs);
+  renderNetWorth();
+  renderSankey();
+  renderCalendar();
+  renderAccounts(txs);
+  renderTransactions(txs);
+  renderLookup();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// INCOME STATEMENT
+// ══════════════════════════════════════════════════════════════════
+function renderIncomeStatement(txs) {
+  const income={}, expenses={};
+  for(const tx of txs) for(const p of tx.postings) {
+    const a=p.amount??0;
+    if(isIncome(p.account))        income[p.account]  =(income[p.account]??0)+a;
+    else if(isExpense(p.account)) expenses[p.account]=(expenses[p.account]??0)+a;
+  }
+
+  const totalInc = -Object.values(income).reduce((s,v)=>s+v,0);
+  const totalExp =  Object.values(expenses).reduce((s,v)=>s+v,0);
+  const net      = totalInc-totalExp;
+  const savRate  = totalInc>0?Math.round((net/totalInc)*100):0;
+
+  document.getElementById('income-period-desc').textContent=periodLabel();
+  document.getElementById('income-stats').innerHTML=`
+    <div class="stat-card"><div class="sc-label">Total Income</div><div class="sc-value c-green">$${fmt(totalInc)}</div><div class="sc-sub">${Object.keys(income).length} sources</div></div>
+    <div class="stat-card"><div class="sc-label">Total Expenses</div><div class="sc-value c-red">$${fmt(totalExp)}</div><div class="sc-sub">${Object.keys(expenses).length} categories</div></div>
+    <div class="stat-card"><div class="sc-label">Net Income</div><div class="sc-value ${net>=0?'c-green':'c-red'}">$${fmt(Math.abs(net))}</div><div class="sc-sub ${net>=0?'c-green':'c-red'}">${net>=0?'▲ Profit':'▼ Loss'}</div></div>
+    <div class="stat-card"><div class="sc-label">Savings Rate</div><div class="sc-value c-indigo">${savRate}%</div><div class="sc-sub">of income saved</div></div>
+  `;
+
+  // Donut
+  destroyChart('income-donut');
+  charts['income-donut']=new Chart(document.getElementById('income-donut'),{
+    type:'doughnut',
+    data:{labels:['Income','Expenses'],datasets:[{data:[totalInc,totalExp],backgroundColor:['rgba(22,163,74,.85)','rgba(220,38,38,.85)'],borderWidth:0,hoverOffset:6}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'68%',
+      plugins:{legend:{position:'bottom',labels:{font:{size:12},padding:14}},
+               tooltip:{callbacks:{label:c=>' $'+fmt(c.raw)}}}}
+  });
+
+  // Bar
+  const topExp=Object.entries(expenses).map(([k,v])=>({label:shortAcct(k),acct:k,value:v})).sort((a,b)=>b.value-a.value).slice(0,8);
+  destroyChart('income-bar');
+  charts['income-bar']=new Chart(document.getElementById('income-bar'),{
+    type:'bar',
+    data:{labels:topExp.map(e=>e.label),datasets:[{label:'Amount',data:topExp.map(e=>e.value),
+      backgroundColor:topExp.map(e=>getCategoryColor(catKey(e.acct))+'d8'),borderRadius:4,borderSkipped:false}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' $'+fmt(c.raw)}}},
+      scales:{x:{grid:{color:'#f1f5f9'},ticks:{callback:tkAxis}},y:{grid:{display:false}}}}
+  });
+
+  // Period matrix
+  renderPeriodMatrix();
+
+  // Detail table — grouped tree display
+  const sortedIncAccts = Object.entries(income).sort((a,b)=>a[1]-b[1]).map(([k])=>k);
+  const sortedExpAccts = Object.entries(expenses).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const incDetailRows  = buildAcctRows(sortedIncAccts);
+  const expDetailRows  = buildAcctRows(sortedExpAccts);
+
+  const renderDetailRows=(rows,valMap,type)=>{
+    let h='';
+    for(const row of rows){
+      if(row.isGroupHeader){
+        h+=`<tr><td style="padding:7px 22px 5px ${row.indent*14+22}px;font-size:11.5px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;background:#fafbff" colspan="2">${row.label}</td></tr>`;
+      } else {
+        const pad=(row.indent*14+36)+'px';
+        const raw=valMap[row.fullAcct]??0;
+        const display=type==='income'?-raw:raw;
+        const cls=type==='income'?'c-green':'c-red';
+        h+=`<tr><td style="padding-left:${pad}">${row.label}</td><td class="td-r td-m ${cls}">$${fmt(display)}</td></tr>`;
+      }
+    }
+    return h;
+  };
+
+  let html=`<table><thead><tr><th>Account</th><th class="r">Amount</th></tr></thead><tbody>`;
+  html+=`<tr class="row-section"><td colspan="2">Income</td></tr>`;
+  html+=renderDetailRows(incDetailRows,income,'income');
+  html+=`<tr class="row-sub"><td style="padding-left:22px">Total Income</td><td class="td-r td-m c-green">$${fmt(totalInc)}</td></tr>`;
+  html+=`<tr class="row-section"><td colspan="2">Expenses</td></tr>`;
+  html+=renderDetailRows(expDetailRows,expenses,'expense');
+  html+=`<tr class="row-sub"><td style="padding-left:22px">Total Expenses</td><td class="td-r td-m c-red">$${fmt(totalExp)}</td></tr>`;
+  html+=`<tr class="row-total"><td style="padding-left:22px">Net Income / (Loss)</td><td class="td-r td-m ${net>=0?'c-green':'c-red'}">${net>=0?'':'('}$${fmt(Math.abs(net))}${net<0?')':''}</td></tr>`;
+  html+=`</tbody></table>`;
+  document.getElementById('income-table').innerHTML=html;
+}
+
+// ── Period matrix (hledger-style balance view) ──────────────────
+function renderPeriodMatrix() {
+  const sps=getSubPeriods();
+  const subLabel=pType==='week'?'Daily':pType==='month'?'Weekly':'Monthly';
+  document.getElementById('matrix-desc').textContent=`${subLabel} breakdown — accounts × sub-periods`;
+
+  // Collect all income/expense accounts
+  const accounts=new Set();
+  const matrix={}; // account → [value per sp]
+
+  for(let i=0;i<sps.length;i++){
+    const sp=sps[i];
+    const spTxs=allTransactions.filter(t=>t.date>=sp.start&&t.date<=sp.end);
+    for(const tx of spTxs) for(const p of tx.postings){
+      if(!isIncome(p.account)&&!isExpense(p.account)) continue;
+      accounts.add(p.account);
+      if(!matrix[p.account]) matrix[p.account]=new Array(sps.length).fill(0);
+      const a=p.amount??0;
+      matrix[p.account][i]+=isIncome(p.account)?-a:a;
+    }
+  }
+
+  if(!accounts.size){
+    document.getElementById('matrix-wrap').innerHTML='<div class="empty-state"><div class="em-icon">📊</div>No income or expense accounts in this period.</div>';
+    return;
+  }
+
+  // Sort: income first by total, then expenses by total
+  const sorted=[...accounts].sort((a,b)=>{
+    const ai=isIncome(a),bi=isIncome(b);
+    if(ai!==bi) return ai?-1:1;
+    const aT=matrix[a].reduce((s,v)=>s+v,0), bT=matrix[b].reduce((s,v)=>s+v,0);
+    return bT-aT;
+  });
+
+  // Compute max per type for heat-map scaling
+  let maxInc=0, maxExp=0;
+  for(const a of sorted){
+    const mx=Math.max(...matrix[a].map(Math.abs));
+    if(isIncome(a)) maxInc=Math.max(maxInc,mx);
+    else            maxExp=Math.max(maxExp,mx);
+  }
+
+  // Build header row
+  let html=`<table><thead><tr>
+    <th style="text-align:left;padding:9px 14px">Account</th>`;
+  for(const sp of sps) html+=`<th class="r" style="padding:9px 14px">${sp.label}</th>`;
+  html+=`<th class="r pm-total" style="padding:9px 14px">Total</th></tr></thead><tbody>`;
+
+  const incAccts = sorted.filter(isIncome);
+  const expAccts = sorted.filter(a=>!isIncome(a));
+  const incRows  = buildAcctRows(incAccts);
+  const expRows  = buildAcctRows(expAccts);
+
+  const renderMatrixSection=(rows,sectionLabel,maxVal,type)=>{
+    let h=`<tr class="matrix-section-hdr"><td colspan="${sps.length+2}">${sectionLabel}</td></tr>`;
+    for(const row of rows){
+      if(row.isGroupHeader){
+        h+=`<tr class="matrix-group-hdr"><td colspan="${sps.length+2}" style="padding-left:${row.indent*14+22}px">${row.label}</td></tr>`;
+        continue;
+      }
+      const acct=row.fullAcct;
+      const values=matrix[acct];
+      const rowTotal=values.reduce((s,v)=>s+v,0);
+      const pad=(row.indent*14+14)+'px';
+      h+=`<tr><td style="padding:7px 14px 7px ${pad};font-size:12.5px;color:#334155">${row.label}</td>`;
+      for(const v of values){
+        if(v===0){ h+=`<td class="pm-cell em">—</td>`; continue; }
+        const intensity=maxVal>0?Math.min(Math.abs(v)/maxVal,1):0;
+        const bg=type==='income'
+          ?`rgba(22,163,74,${0.08+intensity*0.38})`
+          :getCategoryColorRGBA(catKey(acct),0.07+intensity*0.40);
+        const cls=type==='income'?'c-green':'c-red';
+        h+=`<td class="pm-cell" style="background:${bg}"><span class="${cls}">$${fmt(v)}</span></td>`;
+      }
+      const tc=type==='income'?'c-green':'c-red';
+      h+=`<td class="pm-cell pm-total td-m ${tc}">$${fmt(rowTotal)}</td></tr>`;
+    }
+    return h;
+  };
+
+  html += renderMatrixSection(incRows,'Income',maxInc,'income');
+  html += renderMatrixSection(expRows,'Expenses',maxExp,'expense');
+  html+=`</tbody></table>`;
+  document.getElementById('matrix-wrap').innerHTML=html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CASH FLOW (sub-period aware, with per-account drill-down)
+// ══════════════════════════════════════════════════════════════════
+function renderCashFlow(txs) {
+  const acctFilter = document.getElementById('cf-acct-filter')?.value || '';
+  const sps        = getSubPeriods();
+  const subLabel   = pType==='week'?'Daily':pType==='month'?'Weekly':'Monthly';
+
+  if(acctFilter) {
+    // ── Single-account drill-down mode ──────────────────────────
+    document.getElementById('cf-chart-title').textContent=`${shortAcct(acctFilter)} — ${subLabel} Activity`;
+    document.getElementById('cf-chart-sub').textContent=`Balance · change per sub-period`;
+    document.getElementById('cf-period-desc').textContent=`Account: ${acctFilter} · ${periodLabel()}`;
+
+    // Open balance = balance just before period start
+    const {start} = getPeriodRange();
+    const openBal = computeBalancesAsOf(dateStr(addDays(parseDt(start),-1)))[acctFilter]??0;
+
+    const buckets={};
+    for(const sp of sps) buckets[sp.start]={label:sp.label,net:0};
+    for(const tx of txs){
+      const sp=sps.find(s=>tx.date>=s.start&&tx.date<=s.end);
+      if(!sp) continue;
+      for(const p of tx.postings){
+        if(p.account===acctFilter) buckets[sp.start].net+=(p.amount??0);
+      }
+    }
+
+    const keys     = Object.keys(buckets).sort();
+    const labels   = keys.map(k=>buckets[k].label);
+    const netData  = keys.map(k=>buckets[k].net);
+    const runningBal=[]; let rb=openBal;
+    for(const k of keys){ rb+=buckets[k].net; runningBal.push(rb); }
+
+    const totalChange = netData.reduce((s,v)=>s+v,0);
+    const closeBal    = openBal+totalChange;
+    const avgChange   = netData.length?totalChange/netData.length:0;
+    const acctColor   = getCategoryColor(catKey(acctFilter));
+
+    document.getElementById('cashflow-stats').innerHTML=`
+      <div class="stat-card"><div class="sc-label">Open Balance</div><div class="sc-value ${openBal>=0?'c-blue':'c-red'}">${openBal<0?'-':''}$${fmt(Math.abs(openBal))}</div><div class="sc-sub">start of period</div></div>
+      <div class="stat-card"><div class="sc-label">Close Balance</div><div class="sc-value ${closeBal>=0?'c-blue':'c-red'}">${closeBal<0?'-':''}$${fmt(Math.abs(closeBal))}</div><div class="sc-sub">end of period</div></div>
+      <div class="stat-card"><div class="sc-label">Total Change</div><div class="sc-value ${totalChange>=0?'c-green':'c-red'}">${totalChange>=0?'+':'-'}$${fmt(Math.abs(totalChange))}</div><div class="sc-sub">net movement</div></div>
+      <div class="stat-card"><div class="sc-label">Avg / ${subLabel}</div><div class="sc-value c-indigo">${avgChange>=0?'+':'-'}$${fmt(Math.abs(avgChange))}</div><div class="sc-sub">per sub-period</div></div>
+    `;
+
+    destroyChart('cashflow-chart');
+    charts['cashflow-chart']=new Chart(document.getElementById('cashflow-chart'),{
+      type:'bar',
+      data:{labels,datasets:[
+        {label:'Change',data:netData,backgroundColor:netData.map(v=>v>=0?'rgba(22,163,74,.72)':'rgba(220,38,38,.72)'),borderRadius:4,order:2},
+        {label:'Balance',data:runningBal,type:'line',borderColor:acctColor,backgroundColor:acctColor+'22',
+         tension:0.4,fill:true,borderWidth:2.5,pointRadius:keys.length>20?0:3,pointHoverRadius:5,order:1}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{position:'top',labels:{font:{size:12},padding:14}},
+                 tooltip:{callbacks:{label:c=>` ${c.dataset.label}: $${fmt(c.raw)}`}}},
+        scales:{x:{grid:{display:false}},y:{grid:{color:'#f1f5f9'},ticks:{callback:tkAxis}}}
+      }
+    });
+
+    let html=`<table><thead><tr><th>${subLabel} Period</th><th class="r">Change</th><th class="r">Running Balance</th></tr></thead><tbody>`;
+    let bal=openBal;
+    for(const k of keys){
+      const {label,net}=buckets[k]; bal+=net;
+      html+=`<tr><td>${label}</td><td class="td-r">${fmtSign(net)}</td><td class="td-r td-m ${bal>=0?'c-blue':'c-red'}">${bal<0?'-':''}$${fmt(Math.abs(bal))}</td></tr>`;
+    }
+    html+=`<tr class="row-total"><td>Net Change</td><td class="td-r">${fmtSign(totalChange)}</td><td class="td-r td-m ${closeBal>=0?'c-blue':'c-red'}">${closeBal<0?'-':''}$${fmt(Math.abs(closeBal))}</td></tr>`;
+    html+=`</tbody></table>`;
+    document.getElementById('cashflow-table').innerHTML=html;
+    return;
+  }
+
+  // ── Aggregate income vs expenses mode ─────────────────────────
+  document.getElementById('cf-chart-title').textContent=`${subLabel} Income & Expenses`;
+  document.getElementById('cf-chart-sub').textContent=`Bar = income/expenses · Line = net cash flow`;
+  document.getElementById('cf-period-desc').textContent=`${subLabel} income vs. expenses for ${periodLabel()}`;
+
+  const buckets={};
+  for(const sp of sps) buckets[sp.start]={label:sp.label,income:0,expenses:0};
+  for(const tx of txs){
+    const sp=sps.find(s=>tx.date>=s.start&&tx.date<=s.end);
+    if(!sp) continue;
+    for(const p of tx.postings){
+      const a=p.amount??0;
+      if(isIncome(p.account))       buckets[sp.start].income  +=-a;
+      else if(isExpense(p.account)) buckets[sp.start].expenses+=a;
+    }
+  }
+
+  const keys=Object.keys(buckets).sort();
+  const labels=keys.map(k=>buckets[k].label);
+  const incData=keys.map(k=>buckets[k].income);
+  const expData=keys.map(k=>buckets[k].expenses);
+  const netData=keys.map(k=>buckets[k].income-buckets[k].expenses);
+
+  const avgInc=incData.length?incData.reduce((s,v)=>s+v,0)/incData.length:0;
+  const avgExp=expData.length?expData.reduce((s,v)=>s+v,0)/expData.length:0;
+  const bestNet=netData.length?Math.max(...netData):0;
+  const totalNet=netData.reduce((s,v)=>s+v,0);
+
+  document.getElementById('cashflow-stats').innerHTML=`
+    <div class="stat-card"><div class="sc-label">Avg ${subLabel} Income</div><div class="sc-value c-green">$${fmt(avgInc)}</div><div class="sc-sub">per sub-period</div></div>
+    <div class="stat-card"><div class="sc-label">Avg ${subLabel} Spend</div><div class="sc-value c-red">$${fmt(avgExp)}</div><div class="sc-sub">per sub-period</div></div>
+    <div class="stat-card"><div class="sc-label">Best Period</div><div class="sc-value ${bestNet>=0?'c-green':'c-red'}">$${fmt(Math.abs(bestNet))}</div><div class="sc-sub">net surplus</div></div>
+    <div class="stat-card"><div class="sc-label">Period Net</div><div class="sc-value ${totalNet>=0?'c-green':'c-red'}">${totalNet>=0?'':'-'}$${fmt(Math.abs(totalNet))}</div><div class="sc-sub">${totalNet>=0?'surplus':'deficit'}</div></div>
+  `;
+
+  destroyChart('cashflow-chart');
+  charts['cashflow-chart']=new Chart(document.getElementById('cashflow-chart'),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Income',  data:incData,backgroundColor:'rgba(22,163,74,.72)',borderRadius:4,order:2},
+      {label:'Expenses',data:expData,backgroundColor:'rgba(220,38,38,.72)',borderRadius:4,order:2},
+      {label:'Net Flow',data:netData,type:'line',borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.09)',
+       tension:0.4,fill:true,borderWidth:2.5,pointRadius:keys.length>20?0:3,pointHoverRadius:5,order:1}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'top',labels:{font:{size:12},padding:14}},
+               tooltip:{callbacks:{label:c=>` ${c.dataset.label}: $${fmt(c.raw)}`}}},
+      scales:{x:{grid:{display:false}},y:{grid:{color:'#f1f5f9'},ticks:{callback:tkAxis}}}
+    }
+  });
+
+  let html=`<table><thead><tr><th>${subLabel} Period</th><th class="r">Income</th><th class="r">Expenses</th><th class="r">Net</th></tr></thead><tbody>`;
+  let tI=0,tE=0,tN=0;
+  for(const k of keys){
+    const {label,income,expenses}=buckets[k],net=income-expenses;
+    tI+=income; tE+=expenses; tN+=net;
+    html+=`<tr><td>${label}</td><td class="td-r td-m c-green">$${fmt(income)}</td><td class="td-r td-m c-red">$${fmt(expenses)}</td><td class="td-r">${fmtSign(net)}</td></tr>`;
+  }
+  html+=`<tr class="row-total"><td>Total</td><td class="td-r td-m c-green">$${fmt(tI)}</td><td class="td-r td-m c-red">$${fmt(tE)}</td><td class="td-r">${fmtSign(tN)}</td></tr>`;
+  html+=`</tbody></table>`;
+  document.getElementById('cashflow-table').innerHTML=html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// NET WORTH (always full history, monthly)
+// ══════════════════════════════════════════════════════════════════
+function renderNetWorth() {
+  const sorted=[...allTransactions].sort((a,b)=>a.date.localeCompare(b.date));
+  const allMonths=[...new Set(sorted.map(t=>t.date.slice(0,7)))].sort();
+  const balances={};
+  let txIdx=0;
+  const pts=[];
+
+  for(const mo of allMonths){
+    while(txIdx<sorted.length&&sorted[txIdx].date.slice(0,7)<=mo){
+      for(const p of sorted[txIdx].postings) balances[p.account]=(balances[p.account]??0)+(p.amount??0);
+      txIdx++;
+    }
+    let assets=0,liabilities=0;
+    for(const[a,b] of Object.entries(balances)){
+      if(isAsset(a))     assets     +=b;
+      if(isLiability(a)) liabilities+=b; // stored as negative
+    }
+    pts.push({month:mo,assets,liabilities:-liabilities,netWorth:assets+liabilities});
+  }
+
+  // Filter displayed range by current period for chart only; stats use latest
+  const {start,end}=getPeriodRange();
+  const disp=pType==='all'?pts:pts.filter(p=>p.month>=start.slice(0,7)&&p.month<=end.slice(0,7));
+  const show=disp.length?disp:pts; // fallback to all if none in range
+  const latest=pts[pts.length-1]??{assets:0,liabilities:0,netWorth:0};
+  const first=pts[0]??{netWorth:0};
+  const change=latest.netWorth-first.netWorth;
+
+  document.getElementById('networth-stats').innerHTML=`
+    <div class="stat-card"><div class="sc-label">Total Assets</div><div class="sc-value c-blue">$${fmt(latest.assets)}</div><div class="sc-sub">latest snapshot</div></div>
+    <div class="stat-card"><div class="sc-label">Total Liabilities</div><div class="sc-value c-red">$${fmt(latest.liabilities)}</div><div class="sc-sub">total owed</div></div>
+    <div class="stat-card"><div class="sc-label">Net Worth</div><div class="sc-value ${latest.netWorth>=0?'c-green':'c-red'}">$${fmt(Math.abs(latest.netWorth))}</div><div class="sc-sub ${latest.netWorth>=0?'c-green':'c-red'}">${latest.netWorth>=0?'▲ Positive':'▼ Negative'}</div></div>
+    <div class="stat-card"><div class="sc-label">All-Time Change</div><div class="sc-value ${change>=0?'c-green':'c-red'}">${change>=0?'+':'-'}$${fmt(Math.abs(change))}</div><div class="sc-sub">since first entry</div></div>
+  `;
+
+  const labels=show.map(p=>{const[y,m]=p.month.split('-');return new Date(+y,+m-1).toLocaleDateString('en-US',{month:'short',year:'2-digit'});});
+  destroyChart('networth-chart');
+  charts['networth-chart']=new Chart(document.getElementById('networth-chart'),{
+    type:'line',
+    data:{labels,datasets:[
+      {label:'Net Worth',data:show.map(p=>p.netWorth),borderColor:'#16a34a',backgroundColor:'rgba(22,163,74,.1)',fill:true,tension:0.4,borderWidth:2.5,pointRadius:show.length>30?0:3,pointHoverRadius:5},
+      {label:'Assets',  data:show.map(p=>p.assets),   borderColor:'#2563eb',backgroundColor:'transparent',tension:0.4,borderWidth:2,borderDash:[5,4],pointRadius:0,pointHoverRadius:4},
+      {label:'Liabilities',data:show.map(p=>p.liabilities),borderColor:'#dc2626',backgroundColor:'transparent',tension:0.4,borderWidth:2,borderDash:[5,4],pointRadius:0,pointHoverRadius:4}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'top',labels:{font:{size:12},padding:14}},tooltip:{callbacks:{label:c=>` ${c.dataset.label}: $${fmt(c.raw)}`}}},
+      scales:{x:{grid:{display:false}},y:{grid:{color:'#f1f5f9'},ticks:{callback:tkAxis}}}
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CASH FLOW — populate account filter dropdown
+// ══════════════════════════════════════════════════════════════════
+function populateCFAccounts() {
+  const sel=document.getElementById('cf-acct-filter');
+  if(!sel) return;
+  const accts=[...new Set(allTransactions.flatMap(t=>t.postings.map(p=>p.account)))].sort();
+  sel.innerHTML='<option value="">All (Income vs Expenses)</option>';
+  const groups=[
+    {label:'Assets',    filter:a=>isAsset(a)},
+    {label:'Liabilities',filter:a=>isLiability(a)},
+    {label:'Income',    filter:a=>isIncome(a)},
+    {label:'Expenses',  filter:a=>isExpense(a)},
+  ];
+  for(const{label,filter} of groups){
+    const list=accts.filter(filter); if(!list.length) continue;
+    const og=document.createElement('optgroup'); og.label=label;
+    list.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;og.appendChild(o);});
+    sel.appendChild(og);
+  }
+}
+
+// ── Transactions filter helpers ──────────────────────────────────
+function populateTxAccounts() {
+  const sel = document.getElementById('tx-acct-filter');
+  if(!sel) return;
+  const accts = [...new Set(allTransactions.flatMap(t=>t.postings.map(p=>p.account)))].sort();
+  sel.innerHTML = '<option value="">All accounts</option>';
+  const groups=[
+    {label:'Assets',    filter:a=>isAsset(a)},
+    {label:'Liabilities',filter:a=>isLiability(a)},
+    {label:'Income',    filter:a=>isIncome(a)},
+    {label:'Expenses',  filter:a=>isExpense(a)},
+  ];
+  for(const{label,filter} of groups){
+    const list=accts.filter(filter); if(!list.length) continue;
+    const og=document.createElement('optgroup'); og.label=label;
+    list.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;og.appendChild(o);});
+    sel.appendChild(og);
+  }
+}
+
+function applyTxFilter() {
+  txAcctFilter = document.getElementById('tx-acct-filter').value;
+  document.getElementById('tx-clear-btn').style.display = txAcctFilter ? '' : 'none';
+  renderTransactions(filteredTxs());
+}
+
+function clearTxFilter() {
+  txAcctFilter = '';
+  document.getElementById('tx-acct-filter').value = '';
+  document.getElementById('tx-clear-btn').style.display = 'none';
+  renderTransactions(filteredTxs());
+}
+
+// Navigate to Transactions panel filtered to a specific account
+function filterToAccount(acct) {
+  txAcctFilter = acct;
+  const sel = document.getElementById('tx-acct-filter');
+  if(sel) sel.value = acct;
+  document.getElementById('tx-clear-btn').style.display = acct ? '' : 'none';
+  renderTransactions(filteredTxs());
+  showPanel('transactions');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MONEY FLOW — Sankey diagram
+// ══════════════════════════════════════════════════════════════════
+function renderSankey() {
+  const txs=filteredTxs();
+
+  // Income grouped by category (second segment)
+  // Expenses grouped by FULL account path → individual bills
+  const incomeMap={}, expenseMap={};
+  for(const tx of txs) for(const p of tx.postings){
+    const a=p.amount??0;
+    if(isIncome(p.account)){
+      const k=catKey(p.account);
+      incomeMap[k]=(incomeMap[k]||0)+(-a);
+    } else if(isExpense(p.account)){
+      expenseMap[p.account]=(expenseMap[p.account]||0)+a;
+    }
+  }
+
+  const totalInc=Object.values(incomeMap).reduce((s,v)=>s+v,0);
+  const totalExp=Object.values(expenseMap).reduce((s,v)=>s+v,0);
+  const savings =Math.max(0,totalInc-totalExp);
+
+  document.getElementById('sankey-period-desc').textContent=periodLabel();
+  document.getElementById('sankey-desc').textContent=periodLabel();
+  document.getElementById('sankey-stats').innerHTML=`
+    <div class="stat-card"><div class="sc-label">Total Income</div><div class="sc-value c-green">$${fmt(totalInc)}</div><div class="sc-sub">${Object.keys(incomeMap).length} source${Object.keys(incomeMap).length!==1?'s':''}</div></div>
+    <div class="stat-card"><div class="sc-label">Total Expenses</div><div class="sc-value c-red">$${fmt(totalExp)}</div><div class="sc-sub">${Object.keys(expenseMap).length} line item${Object.keys(expenseMap).length!==1?'s':''}</div></div>
+    <div class="stat-card"><div class="sc-label">Net Savings</div><div class="sc-value ${savings>=0?'c-green':'c-red'}">$${fmt(savings)}</div><div class="sc-sub">${totalInc>0?Math.round(savings/totalInc*100):0}% savings rate</div></div>
+  `;
+
+  const svg_el=document.getElementById('sankey-svg');
+  if(totalInc===0){
+    svg_el.setAttribute('viewBox','0 0 820 200');
+    svg_el.innerHTML='<text x="410" y="100" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="system-ui">No income data in this period.</text>';
+    return;
+  }
+
+  // Cap right-side to keep diagram readable
+  let expEntries=Object.entries(expenseMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  if(expEntries.length>16){
+    const top=expEntries.slice(0,15);
+    const otherTotal=expEntries.slice(15).reduce((s,[,v])=>s+v,0);
+    expEntries=[...top,['__other__',otherTotal]];
+  }
+  if(savings>0.5) expEntries.push(['__savings__',savings]);
+
+  const incEntries=Object.entries(incomeMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+
+  // Dynamic SVG height based on node count
+  const W=820, nodeW=16, gapN=9, mt=40, mb=40, minNH=24;
+  const maxNodes=Math.max(incEntries.length,expEntries.length);
+  const H=Math.max(440, mt+mb+maxNodes*(minNH+gapN)-gapN);
+  const availH=H-mt-mb;
+
+  // Pick scale so both columns fit without overflow
+  const incTotal=incEntries.reduce((s,[,v])=>s+v,0);
+  const expTotal=expEntries.reduce((s,[,v])=>s+v,0);
+  const gapsL=gapN*Math.max(incEntries.length-1,0);
+  const gapsR=gapN*Math.max(expEntries.length-1,0);
+  const scaleL=(availH-gapsL)/Math.max(incTotal,0.01);
+  const scaleR=(availH-gapsR)/Math.max(expTotal,0.01);
+  const scale=Math.min(scaleL,scaleR);
+  const ch=v=>Math.max(v*scale,3);
+
+  const lx=132, rx=W-132, midx=W/2;
+  const centerH=ch(incTotal);
+  const centerY=mt+(availH-centerH)/2;
+
+  const incTotalH=incEntries.reduce((s,[,v])=>s+ch(v),0)+gapsL;
+  let iy=mt+(availH-incTotalH)/2;
+  const incNodes=incEntries.map(([name,val])=>{
+    const h=ch(val); const nd={name,val,x:lx-nodeW,y:iy,h}; iy+=h+gapN; return nd;
+  });
+
+  const expTotalH=expEntries.reduce((s,[,v])=>s+ch(v),0)+gapsR;
+  let ey=mt+(availH-expTotalH)/2;
+  const expNodes=expEntries.map(([name,val])=>{
+    const h=ch(val); const nd={name,val,x:rx,y:ey,h}; ey+=h+gapN; return nd;
+  });
+
+  const getExpLabel=name=>name==='__savings__'?'Savings':name==='__other__'?'Other':shortAcct(name);
+  const getExpColor=name=>name==='__savings__'?'#16a34a':name==='__other__'?'#94a3b8':getCategoryColor(catKey(name));
+  const isSpecial  =name=>name==='__savings__'||name==='__other__';
+
+  const ribbonData={}, nodeData={};
+  let svg='';
+
+  // ── Ribbons: income → center ──────────────────────────────────
+  let cLY=centerY;
+  incNodes.forEach((n,i)=>{
+    const rh=ch(n.val), col=getCategoryColor(n.name), id=`sk-ri-${i}`;
+    ribbonData[id]={src:n.name, dest:'Budget', amount:n.val, pct:Math.round(n.val/totalInc*100)};
+    svg+=`<path id="${id}" class="sk-ribbon" d="${ribbonD(n.x+nodeW,n.y,n.h,midx-nodeW/2,cLY,rh)}" fill="${col}" opacity="0.42"/>`;
+    cLY+=rh;
+  });
+
+  // ── Ribbons: center → expenses ────────────────────────────────
+  let cRY=centerY;
+  expNodes.forEach((n,i)=>{
+    const rh=ch(n.val), col=getExpColor(n.name), id=`sk-re-${i}`;
+    const label=getExpLabel(n.name);
+    ribbonData[id]={src:'Budget', dest:label, fullAcct:isSpecial(n.name)?null:n.name, amount:n.val, pct:Math.round(n.val/totalInc*100)};
+    svg+=`<path id="${id}" class="sk-ribbon" d="${ribbonD(midx+nodeW/2,cRY,rh,n.x,n.y,n.h)}" fill="${col}" opacity="0.42"/>`;
+    cRY+=rh;
+  });
+
+  // ── Center node ───────────────────────────────────────────────
+  nodeData['sk-nc']={label:'Budget', amount:totalInc, pct:100, sub:`$${fmtK(totalExp)} spent · $${fmtK(savings)} saved`};
+  svg+=`<rect id="sk-nc" class="sk-node" x="${midx-nodeW/2}" y="${centerY}" width="${nodeW}" height="${centerH}" rx="3" fill="#6366f1"/>`;
+  svg+=`<text x="${midx}" y="${centerY-9}" text-anchor="middle" font-size="11" font-weight="600" fill="#475569" font-family="system-ui">Budget</text>`;
+  svg+=`<text x="${midx}" y="${centerY+centerH+15}" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="system-ui">$${fmtK(totalInc)}</text>`;
+
+  // ── Income nodes + labels ─────────────────────────────────────
+  incNodes.forEach((n,i)=>{
+    const col=getCategoryColor(n.name), id=`sk-ni-${i}`;
+    nodeData[id]={label:n.name, amount:n.val, pct:Math.round(n.val/totalInc*100)};
+    svg+=`<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
+    const ly=n.y+n.h/2+(n.h>24?-4:4);
+    svg+=`<text x="${n.x-8}" y="${ly}" text-anchor="end" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${n.name}</text>`;
+    if(n.h>16) svg+=`<text x="${n.x-8}" y="${ly+13}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  });
+
+  // ── Expense nodes + labels ────────────────────────────────────
+  expNodes.forEach((n,i)=>{
+    const col=getExpColor(n.name), label=getExpLabel(n.name), id=`sk-ne-${i}`;
+    nodeData[id]={label:isSpecial(n.name)?label:n.name, displayLabel:label, amount:n.val, pct:Math.round(n.val/totalInc*100)};
+    svg+=`<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
+    const ly=n.y+n.h/2+(n.h>24?-4:4);
+    svg+=`<text x="${n.x+nodeW+8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
+    if(n.h>16) svg+=`<text x="${n.x+nodeW+8}" y="${ly+13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  });
+
+  svg_el.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  svg_el.innerHTML=svg;
+
+  // ── Hover interactivity ───────────────────────────────────────
+  const tt=document.getElementById('sankey-tooltip');
+  const showTT=(e,html)=>{
+    tt.innerHTML=html; tt.style.display='block';
+    tt.style.left=(e.clientX+18)+'px'; tt.style.top=(e.clientY-60)+'px';
+  };
+  const moveTT=e=>{ tt.style.left=(e.clientX+18)+'px'; tt.style.top=(e.clientY-60)+'px'; };
+  const hideTT=()=>tt.style.display='none';
+  const dimAll =()=>svg_el.querySelectorAll('.sk-ribbon').forEach(r=>r.style.opacity='0.1');
+  const resetAll=()=>svg_el.querySelectorAll('.sk-ribbon').forEach(r=>r.style.opacity='0.42');
+
+  svg_el.querySelectorAll('.sk-ribbon').forEach(el=>{
+    const d=ribbonData[el.id]; if(!d) return;
+    el.addEventListener('mouseenter',()=>{ dimAll(); el.style.opacity='0.82'; });
+    el.addEventListener('mousemove',e=>showTT(e,`
+      <div class="sk-tt-name">${d.src} → ${d.dest}</div>
+      ${d.fullAcct?`<div class="sk-tt-full">${d.fullAcct}</div>`:''}
+      <div class="sk-tt-val">$${fmt(d.amount)}</div>
+      <div class="sk-tt-pct">${d.pct}% of income</div>
+    `));
+    el.addEventListener('mouseleave',()=>{ resetAll(); hideTT(); });
+  });
+
+  svg_el.querySelectorAll('.sk-node').forEach(el=>{
+    const d=nodeData[el.id]; if(!d) return;
+    const dl=d.displayLabel||d.label;
+    const showFull=d.label!==dl;
+    el.addEventListener('mouseenter',e=>showTT(e,`
+      <div class="sk-tt-name">${dl}</div>
+      ${showFull?`<div class="sk-tt-full">${d.label}</div>`:''}
+      ${d.sub?`<div class="sk-tt-sub">${d.sub}</div>`:''}
+      <div class="sk-tt-val">$${fmt(d.amount)}</div>
+      <div class="sk-tt-pct">${d.pct}% of income</div>
+    `));
+    el.addEventListener('mousemove',moveTT);
+    el.addEventListener('mouseleave',hideTT);
+  });
+}
+
+function ribbonD(x1,y1t,h1,x2,y2t,h2){
+  const mx=(x1+x2)/2;
+  return `M${x1},${y1t} C${mx},${y1t} ${mx},${y2t} ${x2},${y2t} L${x2},${y2t+h2} C${mx},${y2t+h2} ${mx},${y1t+h1} ${x1},${y1t+h1} Z`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ACCOUNT BALANCES
+// ══════════════════════════════════════════════════════════════════
+function renderAccounts(txs) {
+  const balances={};
+  for(const tx of txs) for(const p of tx.postings) balances[p.account]=(balances[p.account]??0)+(p.amount??0);
+  const groups={income:[],expense:[],asset:[],liability:[],equity:[],other:[]};
+  for(const[a,b] of Object.entries(balances)) groups[acctType(a)].push({acct:a,bal:b});
+  const order=['asset','liability','income','expense','equity','other'];
+  const labels={asset:'Assets',liability:'Liabilities',income:'Income',expense:'Expenses',equity:'Equity',other:'Other'};
+  let html=`<table><thead><tr><th>Account</th><th class="r">Balance</th></tr></thead><tbody>`;
+  for(const type of order){
+    const list=groups[type]; if(!list.length) continue;
+    list.sort((a,b)=>Math.abs(b.bal)-Math.abs(a.bal));
+    html+=`<tr class="row-section"><td colspan="2">${labels[type]}</td></tr>`;
+    const acctNames=list.map(x=>x.acct);
+    const balMap=Object.fromEntries(list.map(x=>[x.acct,x.bal]));
+    const rows=buildAcctRows(acctNames);
+    for(const row of rows){
+      if(row.isGroupHeader){
+        html+=`<tr><td style="padding:6px 22px 4px ${row.indent*14+28}px;font-size:11.5px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;background:#fafbff" colspan="2">${row.label}</td></tr>`;
+      } else {
+        const bal=balMap[row.fullAcct]??0;
+        const d=type==='income'?-bal:bal, cls=d>=0?'c-green':'c-red';
+        const pad=(row.indent*14+36)+'px';
+        const acctEsc=row.fullAcct.replace(/'/g,"\\'");
+        html+=`<tr class="acct-row" onclick="filterToAccount('${acctEsc}')" title="View transactions for ${row.fullAcct}" style="cursor:pointer">
+          <td style="padding-left:${pad}">${row.label} <span style="font-size:10px;color:#cbd5e1;margin-left:4px">→</span></td>
+          <td class="td-r td-m ${cls}">${d>=0?'':'('}$${fmt(Math.abs(d))}${d<0?')':''}</td></tr>`;
+      }
+    }
+  }
+  html+=`</tbody></table>`;
+  document.getElementById('accounts-table').innerHTML=html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TRANSACTIONS
+// ══════════════════════════════════════════════════════════════════
+function renderTransactions(txs) {
+  // Apply account filter if set
+  const filtered = txAcctFilter
+    ? txs.filter(t => t.postings.some(p => p.account === txAcctFilter))
+    : txs;
+
+  const filterNote = txAcctFilter ? ` · filtered: ${shortAcct(txAcctFilter)}` : '';
+  document.getElementById('tx-count-label').textContent =
+    `${filtered.length.toLocaleString()} transaction${filtered.length!==1?'s':''} · ${periodLabel()}${filterNote}`;
+
+  if(!filtered.length){
+    document.getElementById('transactions-table').innerHTML=`<div class="empty-state"><div class="em-icon">📭</div>No transactions${txAcctFilter?' for this account':''} in this period.<br><small>Use the ‹ › arrows to navigate or clear the filter.</small></div>`;
+    return;
+  }
+
+  let html=`<table><thead><tr><th>Date</th><th>Description</th><th>Postings</th></tr></thead><tbody>`;
+  for(const tx of [...filtered].reverse()){
+    const ph=tx.postings.map(p=>{
+      const highlight = txAcctFilter && p.account===txAcctFilter;
+      return `<div class="tx-posting${highlight?' tx-posting-hi':''}"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount??0)<0?'c-red':'c-slate'}">${p.amountStr??'—'}</span></div>`;
+    }).join('');
+    html+=`<tr><td style="white-space:nowrap;font-size:12px;color:#64748b">${tx.date}</td><td style="font-weight:500;min-width:140px">${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
+  }
+  html+=`</tbody></table>`;
+  document.getElementById('transactions-table').innerHTML=html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BALANCE LOOKUP
+// ══════════════════════════════════════════════════════════════════
+
+// Exact running balances as of a given date string (YYYY-MM-DD)
+function computeBalancesAsOf(dateStr_) {
+  const bal={};
+  for(const tx of allTransactions){
+    if(tx.date>dateStr_) break; // transactions are sorted
+    for(const p of tx.postings) bal[p.account]=(bal[p.account]??0)+(p.amount??0);
+  }
+  return bal;
+}
+
+// Returns {balances, projected, daysAhead, lastKnownDate}
+// For future dates: extrapolates each asset/liability account using
+// the average daily change over the 90 days before the last transaction.
+function computeProjectedBalances(targetDateStr) {
+  const lastDate = allTransactions[allTransactions.length-1]?.date;
+  if(!lastDate || targetDateStr<=lastDate){
+    return { balances:computeBalancesAsOf(targetDateStr), projected:false, lastKnownDate:lastDate };
+  }
+
+  const baseBalances = computeBalancesAsOf(lastDate);
+  const refDate      = dateStr(addDays(parseDt(lastDate),-90));
+  const refBalances  = computeBalancesAsOf(refDate);
+  const daysAhead    = Math.round((parseDt(targetDateStr)-parseDt(lastDate))/864e5);
+
+  const projected = {...baseBalances};
+  for(const[acct,bal] of Object.entries(baseBalances)){
+    if(isAsset(acct)||isLiability(acct)){
+      const ref    = refBalances[acct]??0;
+      const daily  = (bal-ref)/90;
+      projected[acct] = bal + daily*daysAhead;
+    }
+  }
+  return { balances:projected, projected:true, daysAhead, lastKnownDate:lastDate };
+}
+
+function netWorthFrom(balances){
+  let assets=0, liabilities=0;
+  for(const[a,b] of Object.entries(balances)){
+    if(isAsset(a))     assets     +=b;
+    if(isLiability(a)) liabilities+=b; // stored negative
+  }
+  return { assets, liabilities:-liabilities, netWorth:assets+liabilities };
+}
+
+function populateLookupAccounts(){
+  const sel=document.getElementById('lk-acct');
+  const accts=[...new Set(allTransactions.flatMap(t=>t.postings.map(p=>p.account)))].sort();
+  // Show all accounts with balances, grouped by type
+  const groups=['Assets','Liabilities','Income','Expenses','Other'];
+  sel.innerHTML='<option value="">All accounts (net worth)</option>';
+  for(const g of groups){
+    const list=accts.filter(a=>acctType(a)===(g==='Other'?'other':g.slice(0,-1).toLowerCase()+(g==='Assets'||g==='Liabilities'?'':'')));
+    // simpler: just filter by prefix
+    const gList=accts.filter(a=>a.toLowerCase().startsWith(g.toLowerCase().replace('other','')));
+    if(g==='Other'){
+      // non-standard accounts
+      const known=accts.filter(a=>['asset','liability','income','expense','equity'].some(t=>a.toLowerCase().startsWith(t)));
+      const other=accts.filter(a=>!known.includes(a));
+      if(!other.length) continue;
+      const og=document.createElement('optgroup'); og.label='Other';
+      other.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;og.appendChild(o);});
+      sel.appendChild(og);
+    } else {
+      const filtered=accts.filter(a=>a.toLowerCase().startsWith(g.toLowerCase().slice(0,-1)));
+      if(!filtered.length) continue;
+      const og=document.createElement('optgroup'); og.label=g;
+      filtered.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;og.appendChild(o);});
+      sel.appendChild(og);
+    }
+  }
+}
+
+function setLookupPreset(preset){
+  const base=new Date();
+  let target;
+  switch(preset){
+    case 'today': target=base; break;
+    case 'eom':   target=moEnd(base.getFullYear(),base.getMonth()); break;
+    case '1m':    target=addMo(base,1); break;
+    case '3m':    target=addMo(base,3); break;
+    case '6m':    target=addMo(base,6); break;
+    case '1y':    target=addMo(base,12); break;
+    default:      target=base;
+  }
+  document.getElementById('lk-date').value=dateStr(target);
+  renderLookup();
+}
+
+function renderLookup(){
+  const dateVal=document.getElementById('lk-date').value;
+  if(!dateVal||!allTransactions.length){
+    document.getElementById('lk-result').innerHTML='<div class="empty-state"><div class="em-icon">📅</div>Pick a date above to see balances.</div>';
+    return;
+  }
+  const acctFilter=document.getElementById('lk-acct').value;
+  const {balances,projected,daysAhead,lastKnownDate}=computeProjectedBalances(dateVal);
+
+  // Today's balances for delta
+  const todayStr=dateStr(new Date());
+  const todayBal=computeBalancesAsOf(todayStr);
+  const todayNW=netWorthFrom(todayBal);
+
+  const {assets,liabilities,netWorth}=netWorthFrom(balances);
+
+  let html='';
+
+  // ── Projection banner ──────────────────────────────────────
+  if(projected){
+    html+=`<div class="lk-proj-banner">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>Projecting <strong>${daysAhead} days</strong> beyond your last transaction (${lastKnownDate}) — using 90-day average daily change per account.</span>
+    </div>`;
+  }
+
+  if(acctFilter){
+    // ── Single account view ──────────────────────────────────
+    const bal   = balances[acctFilter]??0;
+    const today = todayBal[acctFilter]??0;
+    const delta = bal-today;
+    const type  = acctType(acctFilter);
+    const display= type==='income'?-bal:bal;
+    const dDisplay=type==='income'?-delta:delta;
+    const cls   = display>=0?'c-green':'c-red';
+
+    html+=`<div class="lk-hero">
+      <div class="lk-hero-top">
+        <div>
+          <div class="lk-hero-lbl">${acctFilter}</div>
+          <div class="lk-hero-val ${cls}">${display<0?'-':''}$${fmt(Math.abs(display))}</div>
+          <div class="lk-hero-delta ${dDisplay>=0?'c-green':'c-red'}">${dDisplay>=0?'▲':'▼'} $${fmt(Math.abs(dDisplay))} vs. today</div>
+        </div>
+        <div style="text-align:right;color:#94a3b8;font-size:13px">
+          as of<br><strong style="color:#1e293b;font-size:15px">${formatDisplayDate(dateVal)}</strong>
+        </div>
+      </div>
+    </div>`;
+
+    // Monthly balance history for this account
+    const months=getMonthBuckets(parseDt(allTransactions[0]?.date||dateVal),parseDt(allTransactions[allTransactions.length-1]?.date||dateVal));
+    html+=`<div class="lk-history">
+      <div class="lk-history-hdr">Balance History — ${shortAcct(acctFilter)}</div>
+      <table style="margin-top:8px"><thead><tr><th>Month</th><th class="r">Balance</th><th class="r">Change</th></tr></thead><tbody>`;
+    let prevBal=null;
+    for(const mo of months){
+      const moBal=computeBalancesAsOf(mo.end);
+      const b=moBal[acctFilter]??0;
+      const disp=type==='income'?-b:b;
+      const chg=prevBal===null?null:disp-prevBal;
+      const chgHtml=chg===null?'<td class="td-r c-slate">—</td>':`<td class="td-r ${chg>=0?'c-green':'c-red'} td-m">${chg>=0?'+':'-'}$${fmt(Math.abs(chg))}</td>`;
+      html+=`<tr><td>${mo.label}</td><td class="td-r td-m ${disp>=0?'c-green':'c-red'}">${disp<0?'-':''}$${fmt(Math.abs(disp))}</td>${chgHtml}</tr>`;
+      prevBal=disp;
+    }
+    html+=`</tbody></table></div>`;
+
+  } else {
+    // ── Net worth view ───────────────────────────────────────
+    const nwDelta=netWorth-todayNW.netWorth;
+    const assetDelta=assets-(todayNW.assets);
+    const liabDelta=liabilities-(todayNW.liabilities);
+
+    html+=`<div class="lk-hero">
+      <div class="lk-hero-top">
+        <div>
+          <div class="lk-hero-lbl">Net Worth${projected?' (projected)':''}</div>
+          <div class="lk-hero-val ${netWorth>=0?'c-green':'c-red'}">${netWorth<0?'-':''}$${fmt(Math.abs(netWorth))}</div>
+          <div class="lk-hero-delta ${nwDelta>=0?'c-green':'c-red'}">${nwDelta>=0?'▲':'▼'} $${fmt(Math.abs(nwDelta))} vs. today</div>
+        </div>
+        <div style="text-align:right;color:#94a3b8;font-size:13px">
+          as of<br><strong style="color:#1e293b;font-size:15px">${formatDisplayDate(dateVal)}</strong>
+        </div>
+      </div>
+      <div class="lk-hero-stats">
+        <div class="lk-hero-stat">
+          <div class="h-lbl">Assets</div>
+          <div class="h-val c-blue">$${fmt(assets)}</div>
+          <div style="font-size:12px;margin-top:2px;${assetDelta>=0?'color:#16a34a':'color:#dc2626'}">${assetDelta>=0?'▲':'▼'} $${fmt(Math.abs(assetDelta))}</div>
+        </div>
+        <div class="lk-hero-stat">
+          <div class="h-lbl">Liabilities</div>
+          <div class="h-val c-red">$${fmt(liabilities)}</div>
+          <div style="font-size:12px;margin-top:2px;${liabDelta<=0?'color:#16a34a':'color:#dc2626'}">${liabDelta<=0?'▼':'▲'} $${fmt(Math.abs(liabDelta))}</div>
+        </div>
+        <div class="lk-hero-stat">
+          <div class="h-lbl">Debt-to-Asset</div>
+          <div class="h-val c-indigo">${assets>0?(liabilities/assets*100).toFixed(1):0}%</div>
+        </div>
+      </div>
+    </div>`;
+
+    // Asset + Liability breakdown side by side
+    const assetEntries  =Object.entries(balances).filter(([a])=>isAsset(a)).sort((a,b)=>b[1]-a[1]);
+    const liabEntries   =Object.entries(balances).filter(([a])=>isLiability(a)).sort((a,b)=>a[1]-b[1]);
+
+    const renderLkSection=(entries,title,sign)=>{
+      if(!entries.length) return '';
+      const rows=buildAcctRows(entries.map(([a])=>a));
+      let h=`<div class="lk-section"><div class="lk-section-hdr">${title}</div>`;
+      for(const row of rows){
+        if(row.isGroupHeader){
+          h+=`<div class="lk-row-group">${row.label}</div>`;
+        } else {
+          const b=balances[row.fullAcct]??0;
+          const d=sign==='asset'?b:-b; // assets positive, liabilities show as positive owed
+          const todayD=sign==='asset'?(todayBal[row.fullAcct]??0):-(todayBal[row.fullAcct]??0);
+          const delta=d-todayD;
+          const cls=d>=0?'c-green':'c-red';
+          h+=`<div class="lk-row">
+            <span class="lk-row-name${row.indent?' indent':''}">${row.label}</span>
+            <span class="lk-row-val ${cls}">${d<0?'-':''}$${fmt(Math.abs(d))}</span>
+          </div>`;
+        }
+      }
+      const total=entries.reduce((s,[,v])=>s+v,0);
+      const td=sign==='asset'?total:-total;
+      h+=`<div class="lk-row-total"><span>Total ${title}</span><span class="${td>=0?'c-blue':'c-red'}">${td<0?'-':''}$${fmt(Math.abs(td))}</span></div></div>`;
+      return h;
+    };
+
+    html+=`<div class="lk-breakdown">
+      ${renderLkSection(assetEntries,'Assets','asset')}
+      ${renderLkSection(liabEntries,'Liabilities','liability')}
+    </div>`;
+  }
+
+  document.getElementById('lk-result').innerHTML=html;
+}
+
+function formatDisplayDate(dateStr_){
+  return parseDt(dateStr_).toLocaleDateString('en-US',{weekday:'short',month:'long',day:'numeric',year:'numeric'});
+}
+
+// ══════════════════════════════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════════════════════════════
+function exportPDF(){ window.print(); }
+
+async function exportPNG(){
+  const btn = event.currentTarget;
+  const active = document.querySelector('.report-panel.active');
+  if(!active) return;
+  const orig = btn.innerHTML; btn.innerHTML = '⏳'; btn.disabled = true;
+
+  const SCALE = 2;
+  const PAD   = 40; // screen-pixel inset on every side
+
+  // The .content div is overflow:auto which clips the panel to the viewport.
+  // Temporarily remove that constraint so html2canvas sees the full height.
+  const content = document.getElementById('main-content');
+  const savedOverflow = content.style.overflow;
+  const savedHeight   = content.style.height;
+  content.style.overflow = 'visible';
+  content.style.height   = 'auto';
+
+  try {
+    const captured = await html2canvas(active, {
+      backgroundColor: '#f1f5f9',
+      scale:    SCALE,
+      useCORS:  true,
+      logging:  false,
+      scrollX:  0,
+      scrollY:  0,
+    });
+
+    // Composite onto a padded canvas so content isn't right at the edge
+    const pxPad = PAD * SCALE;
+    const out   = document.createElement('canvas');
+    out.width   = captured.width  + pxPad * 2;
+    out.height  = captured.height + pxPad * 2;
+    const ctx   = out.getContext('2d');
+
+    // Background
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(0, 0, out.width, out.height);
+
+    // Subtle shadow behind the content area
+    ctx.shadowColor   = 'rgba(0,0,0,0.10)';
+    ctx.shadowBlur    = 24 * SCALE;
+    ctx.shadowOffsetY =  4 * SCALE;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    const r = 12 * SCALE; // rounded corners
+    ctx.roundRect(pxPad, pxPad, captured.width, captured.height, r);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+
+    // Draw captured content inset
+    ctx.drawImage(captured, pxPad, pxPad);
+
+    const a = document.createElement('a');
+    a.download = 'folio-report.png';
+    a.href = out.toDataURL('image/png');
+    a.click();
+  } catch(e) {
+    alert('PNG export failed: ' + e.message);
+  } finally {
+    content.style.overflow = savedOverflow;
+    content.style.height   = savedHeight;
+    btn.innerHTML = orig; btn.disabled = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SAMPLE DATA
+// ══════════════════════════════════════════════════════════════════
+function loadSampleData(){
+  document.getElementById('filename-display').textContent='sample.ledger';
+  initDashboard(generateSample());
+}
+
+function generateSample(){
+  const lines=[], rand=(a,b)=>Math.round((Math.random()*(b-a)+a)*100)/100, p2=n=>String(n).padStart(2,'0');
+  const months=['2024-01','2024-02','2024-03','2024-04','2024-05','2024-06','2024-07','2024-08','2024-09','2024-10','2024-11','2024-12','2025-01','2025-02','2025-03','2025-04'];
+
+  // Opening balances
+  lines.push('2024-01-01 * Opening Balances','    Assets:Checking              $12,450.00','    Assets:Savings               $28,000.00','    Liabilities:CreditCard       $-2,300.00','    Equity:OpeningBalance','');
+
+  for(const m of months){
+    const[y,mo]=m.split('-');
+    const rd=n=>p2(Math.floor(rand(1,n)));
+
+    // Salary
+    const sal=rand(5800,6200);
+    lines.push(`${m}-01 * Payroll - Acme Corp`,`    Assets:Checking              $${sal.toFixed(2)}`,`    Income:Salary               $-${sal.toFixed(2)}`,'');
+
+    // Side income (60% chance)
+    if(Math.random()>.4){const s=rand(200,800);lines.push(`${m}-${rd(8)} * Freelance payment`,`    Assets:Checking              $${s.toFixed(2)}`,`    Income:Freelance            $-${s.toFixed(2)}`,'');}
+
+    // Interest (monthly)
+    const int=rand(8,22);lines.push(`${m}-${rd(5)} * Interest income`,`    Assets:Savings               $${int.toFixed(2)}`,`    Income:Interest             $-${int.toFixed(2)}`,'');
+
+    // Rent
+    lines.push(`${m}-02 * Rent`,`    Expenses:Housing:Rent        $1,750.00`,`    Assets:Checking`,``);
+
+    // Groceries (multiple trips)
+    for(let i=0;i<rand(2,4);i++){const g=rand(60,180);lines.push(`${m}-${rd(28)} * Grocery run`,`    Expenses:Food:Groceries      $${g.toFixed(2)}`,`    Assets:Checking`,``);}
+
+    // Dining
+    for(let i=0;i<rand(2,5);i++){const d=rand(20,90);lines.push(`${m}-${rd(28)} * Restaurant`,`    Expenses:Food:Dining         $${d.toFixed(2)}`,`    Liabilities:CreditCard`,``);}
+
+    // Utilities
+    const u=rand(85,160);lines.push(`${m}-${rd(10)} * Utilities`,`    Expenses:Utilities           $${u.toFixed(2)}`,`    Assets:Checking`,``);
+
+    // Transport
+    const t=rand(40,130);lines.push(`${m}-${rd(20)} * Transportation`,`    Expenses:Transportation      $${t.toFixed(2)}`,`    Assets:Checking`,``);
+
+    // Entertainment (70% chance)
+    if(Math.random()>.3){const e=rand(20,110);lines.push(`${m}-${rd(25)} * Entertainment`,`    Expenses:Entertainment       $${e.toFixed(2)}`,`    Liabilities:CreditCard`,``);}
+
+    // Subscriptions
+    lines.push(`${m}-${rd(7)} * Subscriptions`,`    Expenses:Subscriptions       $42.00`,`    Liabilities:CreditCard`,``);
+
+    // Gym
+    lines.push(`${m}-${rd(6)} * Gym membership`,`    Expenses:Health:Gym          $45.00`,`    Assets:Checking`,``);
+
+    // Healthcare (30% chance)
+    if(Math.random()>.7){const h=rand(30,200);lines.push(`${m}-${rd(20)} * Healthcare`,`    Expenses:Health:Medical      $${h.toFixed(2)}`,`    Assets:Checking`,``);}
+
+    // Savings transfer
+    const sv=rand(300,700);lines.push(`${m}-28 * Transfer to savings`,`    Assets:Savings               $${sv.toFixed(2)}`,`    Assets:Checking`,``);
+
+    // CC payment
+    const cc=rand(200,450);lines.push(`${m}-${rd(26)} * Credit card payment`,`    Liabilities:CreditCard       $${cc.toFixed(2)}`,`    Assets:Checking`,``);
+  }
+  return lines.join('\n');
+}
+</script>
+</body>
+</html>
