@@ -98,6 +98,53 @@ html.dark .privacy-banner-text { color:#4ade80; }
 .btn-danger { background:transparent; color:#ef4444; border:1px solid rgba(239,68,68,.4); }
 .btn-danger:hover { background:rgba(239,68,68,.08); }
 
+/* ─── Live-watch button ──────────────────────────────────────────── */
+/* Active (watching) state: green with a pulsing dot to signal live activity */
+.btn-live.watching { color:var(--c-pos); border-color:var(--c-pos); background:var(--c-pos-bg); }
+/* Visually-disabled state for unsupported browsers — we use a class rather than
+   the HTML `disabled` attribute so the click handler still fires and can show
+   the explanatory modal. `disabled` would suppress click events entirely. */
+.btn-live.unsupported { opacity:.45; cursor:not-allowed; }
+
+/* ─── Modals ─────────────────────────────────────────────────────── */
+/* Full-screen darkened overlay — pointer-events off when closed */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,.50);
+  display:flex; align-items:center; justify-content:center; z-index:10000;
+  opacity:0; pointer-events:none; transition:opacity .18s;
+}
+.modal-overlay.open { opacity:1; pointer-events:all; }
+/* Card that slides up slightly on open */
+.modal-box {
+  background:var(--surface); border-radius:14px;
+  box-shadow:0 8px 40px rgba(0,0,0,.30); width:100%; max-width:430px;
+  margin:16px; overflow:hidden;
+  transform:translateY(10px); transition:transform .2s;
+}
+.modal-overlay.open .modal-box { transform:translateY(0); }
+.modal-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 20px 14px; border-bottom:1px solid var(--border-2);
+}
+.modal-title { font-size:15px; font-weight:700; color:var(--text-1); }
+.modal-close {
+  background:none; border:none; cursor:pointer; color:var(--text-4);
+  font-size:18px; line-height:1; padding:2px 6px; border-radius:5px;
+}
+.modal-close:hover { color:var(--text-2); background:var(--surface-3); }
+.modal-body { padding:18px 20px; font-size:13.5px; color:var(--text-2); line-height:1.7; }
+.modal-body p + p { margin-top:10px; }
+.modal-body strong { color:var(--text-1); font-weight:600; }
+/* Browser support chips shown in the unsupported modal */
+.modal-browser-row { display:flex; gap:7px; margin-top:13px; flex-wrap:wrap; }
+.mbchip { font-size:11.5px; font-weight:700; padding:3px 11px; border-radius:20px; }
+.mbchip-yes { background:var(--c-pos-bg); color:var(--c-pos); }
+.mbchip-no  { background:var(--surface-3); color:var(--text-4); text-decoration:line-through; }
+.modal-footer {
+  display:flex; justify-content:flex-end; gap:8px;
+  padding:14px 20px; border-top:1px solid var(--border-2);
+}
+
 /* ─── Dashboard Shell ────────────────────────────────────────────── */
 #dashboard { display:none; flex-direction:column; height:100vh; overflow:hidden; }
 
@@ -470,6 +517,21 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
       <svg id="theme-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
 
+    <!-- Live file-watch button — enabled only in Chromium browsers that support
+         the File System Access API. Populated/disabled by initLiveBtn() at boot. -->
+    <button class="btn btn-ghost btn-live" id="live-btn"
+            onclick="handleLiveBtnClick()"
+            data-tip="Auto-refresh when your .ledger file changes on disk">
+      <!-- broadcast/wifi icon to suggest live streaming -->
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+        <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+        <circle cx="12" cy="20" r="1" fill="currentColor"/>
+      </svg>
+      Live
+    </button>
+
     <div class="export-btns">
       <button class="btn btn-ghost" onclick="exportPNG()" data-tip="Save a PNG screenshot of the active panel">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>PNG
@@ -743,6 +805,23 @@ let calView      = 'month';  // 'month' | 'week' — which calendar layout is ac
 let txAcctFilter = '';        // transactions panel account filter (exact account name or '')
 let txStatusFilter = ''; // '' = all | 'cleared' | 'pending' | 'unmarked'
 
+// ─── Live file-watch state ────────────────────────────────────────
+// These track whether the File System Access API is available and whether
+// a live watch session is currently active.
+let liveHandle   = null; // FileSystemFileHandle — the watched file's persistent handle
+let liveInterval = null; // setInterval ID for the 2-second poll loop
+let liveLastMod  = null; // lastModified timestamp from the previous poll — change detection
+
+// Feature-detect the File System Access API (Chromium only as of 2025).
+// NOTE: In Brave with Shields up, showOpenFilePicker is removed from window
+// entirely, making this false even though the browser could support it with
+// shields lowered. We detect Brave separately to show the right error modal.
+const supportsLiveWatch = (typeof window.showOpenFilePicker === 'function');
+
+// Brave exposes navigator.brave (synchronously readable) for detection purposes.
+// Used to show a "lower your shields" modal rather than "unsupported browser".
+const isBraveBrowser = (typeof navigator.brave !== 'undefined');
+
 // ─── Date helpers ─────────────────────────────────────────────────
 const pad2    = n => String(n).padStart(2,'0');                                   // zero-pad to 2 digits
 const dateStr = d => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; // Date → 'YYYY-MM-DD'
@@ -930,6 +1009,8 @@ function initDashboard(content) {
 }
 
 function resetUpload() {
+  // Stop any active live-watch session before returning to the upload screen
+  stopLiveWatch();
   document.getElementById('upload-screen').style.display='flex';
   document.getElementById('dashboard').style.display='none';
   fileInput.value='';
@@ -2403,6 +2484,234 @@ function formatDisplayDate(dateStr_){
 }
 
 // ══════════════════════════════════════════════════════════════════
+// MODAL SYSTEM
+// ══════════════════════════════════════════════════════════════════
+// showModal / closeModal: lightweight shared dialog.
+// Callers populate title, body HTML, and footer HTML, then the overlay
+// fades in. Clicking the backdrop or the ✕ button closes it.
+
+/**
+ * Opens the shared modal with given content.
+ * @param {string} title      - Text shown in the header
+ * @param {string} bodyHtml   - Inner HTML for the body section
+ * @param {string} footerHtml - Inner HTML for the footer (usually action buttons)
+ */
+function showModal(title, bodyHtml, footerHtml = '') {
+  document.getElementById('modal-title').textContent  = title;
+  document.getElementById('modal-body').innerHTML     = bodyHtml;
+  document.getElementById('modal-footer').innerHTML   = footerHtml;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+/** Closes the shared modal. */
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// LIVE FILE WATCH
+// ══════════════════════════════════════════════════════════════════
+// Uses the File System Access API (Chromium-only) to hold a persistent
+// handle to the user's .ledger file on disk and poll for changes every
+// 2 seconds. When lastModified changes, the file is silently re-parsed
+// and the dashboard re-renders — current panel and period are preserved.
+
+/**
+ * Called on topbar button click.
+ * Routes to: stop watch (if active), info modal (if supported), or
+ * unsupported modal (if browser lacks the File System Access API).
+ */
+/**
+ * Called on topbar button click. Three possible routes:
+ *   1. Already watching         → stop immediately, no modal
+ *   2. Brave with shields up    → "lower shields" modal (API hidden by Brave)
+ *   3. Truly unsupported        → "use Chrome/Edge/Brave" modal
+ *   4. Supported, not watching  → info modal with "Pick File & Start" CTA
+ */
+function handleLiveBtnClick() {
+  // Case 1: turn off an active session
+  if(liveInterval) {
+    stopLiveWatch();
+    return;
+  }
+
+  if(!supportsLiveWatch) {
+    if(isBraveBrowser) {
+      // Case 2: Brave detected but API missing — Shields are blocking it
+      showModal(
+        'Live Watch Blocked by Brave Shields',
+        `<p>You're using <strong>Brave</strong>, which supports this feature — but <strong>Shields</strong> is currently hiding the File System Access API under its fingerprinting protection.</p>
+         <p><strong>To enable live watching:</strong></p>
+         <ol style="margin:8px 0 0 18px;line-height:2.1">
+           <li>Click the <strong>Brave Shields icon</strong> (lion) in the address bar</li>
+           <li>Under <em>Fingerprinting</em>, select <strong>Allow all fingerprinting</strong></li>
+           <li>Reload the page, then click Live again</li>
+         </ol>
+         <p style="margin-top:12px;color:var(--text-3);font-size:12.5px">This setting only applies to this page and doesn't affect your other browsing.</p>`,
+        `<button class="btn btn-ghost" onclick="closeModal()">Got It</button>`
+      );
+    } else {
+      // Case 3: Genuinely unsupported browser (Firefox, Safari)
+      showModal(
+        'Live Updates — Not Available in This Browser',
+        `<p>Live file watching uses the <strong>File System Access API</strong>, which lets Folio hold a persistent handle to your <code>.ledger</code> file and re-read it automatically whenever you save changes in your editor.</p>
+         <p>Your current browser doesn't support this API. Live watching works in:</p>
+         <div class="modal-browser-row">
+           <span class="mbchip mbchip-yes">✓ Chrome</span>
+           <span class="mbchip mbchip-yes">✓ Edge</span>
+           <span class="mbchip mbchip-yes">✓ Brave</span>
+           <span class="mbchip mbchip-no">Firefox</span>
+           <span class="mbchip mbchip-no">Safari</span>
+         </div>
+         <p style="margin-top:13px">You can still use Folio normally — just re-drag your file after making changes.</p>`,
+        `<button class="btn btn-ghost" onclick="closeModal()">Got It</button>`
+      );
+    }
+    return;
+  }
+
+  // Case 4: Supported browser, not yet watching — explain then open picker
+  showModal(
+    'Live File Watching',
+    `<p>Folio can monitor your <code>.ledger</code> file on disk and automatically refresh the dashboard whenever you save changes in your editor — no manual reload needed.</p>
+     <p><strong>How it works:</strong> Click <em>Pick File &amp; Start</em> to open the system file picker. Folio polls the file every 2 seconds and silently re-parses if it detects a change. Your current panel, period, and filters are preserved.</p>
+     <p><strong>Note:</strong> This requires picking the file via the system dialog — drag-and-drop provides a one-time snapshot and cannot be re-read. You can still drag files for one-off loads; live watch is a separate opt-in.</p>`,
+    `<button class="btn btn-ghost" onclick="closeModal()" style="margin-right:4px">Cancel</button>
+     <button class="btn btn-ghost" style="color:var(--c-pos);border-color:var(--c-pos)"
+             onclick="closeModal(); startLiveWatch()">
+       Pick File &amp; Start Watching
+     </button>`
+  );
+}
+
+/**
+ * Opens the system file picker and begins the 2-second polling loop.
+ * Called after the user confirms in the info modal.
+ */
+async function startLiveWatch() {
+  try {
+    // showOpenFilePicker returns an array; we only want one file
+    const [handle] = await window.showOpenFilePicker({
+      types: [{
+        description: 'Ledger / Journal files',
+        accept: { 'text/plain': ['.ledger', '.journal', '.hledger', '.txt'] }
+      }],
+      multiple: false,
+    });
+
+    liveHandle = handle;
+
+    // Read and load immediately so the dashboard reflects the picked file
+    const file = await handle.getFile();
+    liveLastMod = file.lastModified;
+    document.getElementById('filename-display').textContent = file.name;
+    const text = await file.text();
+    // Use a "soft" reload that preserves the current panel/period
+    allTransactions = parseLedger(text);
+    renderAll();
+    // Make sure the dashboard is visible (user may have loaded via drag first)
+    document.getElementById('upload-screen').style.display = 'none';
+    document.getElementById('dashboard').style.display     = 'flex';
+
+    // Start polling every 2 seconds — re-parse only when lastModified changes
+    liveInterval = setInterval(async () => {
+      try {
+        const f = await liveHandle.getFile();
+        if(f.lastModified !== liveLastMod) {
+          liveLastMod = f.lastModified;
+          const updated = await f.text();
+          // Soft re-parse: preserve panel, period, filters — just refresh data
+          allTransactions = parseLedger(updated);
+          renderAll();
+        }
+      } catch(e) {
+        // Handle went stale (file deleted / permission revoked) — stop gracefully
+        stopLiveWatch();
+      }
+    }, 2000);
+
+    updateLiveBtn(true);
+
+  } catch(e) {
+    // AbortError = user cancelled the system picker — silent no-op
+    if(e.name === 'AbortError') return;
+
+    // NotAllowedError / SecurityError usually means the browser blocked the API.
+    // In Brave this is caused by Shields' fingerprinting protection — the API is
+    // present on window (so feature detection passes) but throws when invoked.
+    const isBlocked = (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+
+    showModal(
+      'Live Watch — File Picker Blocked',
+      `<p>${isBlocked
+        ? `The file picker was blocked by your browser's security settings. In <strong>Brave</strong>, this is usually caused by <strong>Shields</strong> restricting the File System Access API under its fingerprinting protection.`
+        : `The file picker failed with an unexpected error: <strong>${e.name}</strong> — ${e.message}`
+      }</p>
+      ${isBlocked ? `
+      <p><strong>Quick fix for Brave:</strong></p>
+      <ol style="margin:8px 0 0 18px;line-height:2">
+        <li>Click the <strong>Brave Shields</strong> icon (lion) in the address bar</li>
+        <li>Set <strong>Fingerprinting</strong> to <em>Allow all fingerprinting</em></li>
+        <li>Reload the page and try again</li>
+      </ol>
+      <p style="margin-top:10px">Alternatively, Chrome or Edge support this feature without restrictions.</p>` : ''}`,
+      `<button class="btn btn-ghost" onclick="closeModal()">OK</button>`
+    );
+  }
+}
+
+/** Stops the polling loop and resets all live-watch state. */
+function stopLiveWatch() {
+  if(liveInterval) { clearInterval(liveInterval); liveInterval = null; }
+  liveHandle  = null;
+  liveLastMod = null;
+  updateLiveBtn(false);
+}
+
+/**
+ * Updates the Live button's visual state.
+ * @param {boolean} active - true = green "watching" state, false = idle
+ */
+function updateLiveBtn(active) {
+  const btn = document.getElementById('live-btn');
+  if(!btn) return;
+  if(active) {
+    btn.classList.add('watching');
+    btn.setAttribute('data-tip', 'Live — watching for changes · click to stop');
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg> Live`;
+  } else {
+    btn.classList.remove('watching');
+    btn.setAttribute('data-tip', supportsLiveWatch
+      ? 'Auto-refresh when your .ledger file changes on disk'
+      : 'Live watching requires Chrome, Edge, or Brave');
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg> Live`;
+  }
+}
+
+/**
+ * Runs once at boot to configure the Live button based on browser support.
+ * On unsupported browsers the button is disabled and its tooltip explains why.
+ */
+/**
+ * Runs once at boot. If the API is unavailable we add a CSS class (not the
+ * HTML `disabled` attribute) so the button looks greyed-out but still fires
+ * click events — the click handler then shows the right explanatory modal.
+ */
+function initLiveBtn() {
+  const btn = document.getElementById('live-btn');
+  if(!btn) return;
+  if(!supportsLiveWatch) {
+    btn.classList.add('unsupported');
+    // Tooltip hint differs: Brave users get a shields hint, others get browser list
+    btn.setAttribute('data-tip', isBraveBrowser
+      ? 'Blocked by Brave Shields — click for fix'
+      : 'Live watching requires Chrome, Edge, or Brave — click to learn more');
+  }
+}
+// Run immediately — the button is in the DOM at this point
+initLiveBtn();
+
+// ══════════════════════════════════════════════════════════════════
 // EXPORT
 // ══════════════════════════════════════════════════════════════════
 // PDF export: triggers window.print() — the print CSS hides the sidebar/controls.
@@ -2544,5 +2853,22 @@ function generateSample(){
   return lines.join('\n');
 }
 </script>
+
+<!-- ─── Modal overlay ──────────────────────────────────────────────
+     Shared modal used for info dialogs throughout the app.
+     Clicking the backdrop (modal-overlay) closes it; clicking the box
+     stops propagation so the box itself doesn't close it.
+──────────────────────────────────────────────────────────────────── -->
+<div id="modal-overlay" class="modal-overlay" onclick="closeModal()">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title"></span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
 </body>
 </html>
