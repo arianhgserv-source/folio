@@ -1,9 +1,9 @@
 ![Banner Social Image](https://i.imgur.com/D1PRVtF.png)
 
 <h1 align="center">Folio — hLedger Reader</h1>
-<p align="center"><b>Folio</b> is a zero-install, single-file financial dashboard for <a href="https://hledger.org/">hLedger</a> plain-text accounting files. Drop in your <code>.ledger</code> file and instantly explore your finances through interactive charts, tables, and a daily calendar — all running entirely inside your browser. Nothing is ever uploaded to a server.</p>
+<p align="center"><b>Folio</b> is a zero-install, single-file financial dashboard for <a href="https://hledger.org/" target="_blank">hLedger</a> plain-text accounting files. Drop in your <code>.ledger</code> file and instantly explore your finances through interactive charts, tables, and a daily calendar — all running entirely inside your browser. Nothing is ever uploaded to a server.</p>
 
-<h3 align="center"><a href="https://arianhgserv-source.github.io/folio/">📘 Use Folio</a> • <a href="https://github.com/arianhgserv-source/folio#features">✨ Features</a> • <a href="https://github.com/arianhgserv-source/folio#getting-started"> 🚀 Getting Started</a> • <a href=https://github.com/arianhgserv-source/folio#privacy">🔒 Privacy</a> </h3> 
+<h3 align="center"><a href="https://arianhgserv-source.github.io/folio/" target="_blank">📘 Use Folio</a> • <a href="https://github.com/arianhgserv-source/folio#features">✨ Features</a> • <a href="https://github.com/arianhgserv-source/folio#getting-started"> 🚀 Getting Started</a> • <a href=https://github.com/arianhgserv-source/folio#privacy">🔒 Privacy</a> </h3> 
 
 ---
 ## Description
@@ -70,7 +70,7 @@ Switch between **Week, Month, Quarter, Year**, and **All Time** views with a sin
 
 ## Getting Started
 
-**Quick Start:** You can use Folio by simply [visiting this link!](https://arianhgserv-source.github.io/folio/) Remember, this application runs entirely in your browser- your data never leaves your machine.
+**Quick Start:** You can use Folio by simply <a href="https://arianhgserv-source.github.io/folio/" target="_blank">visiting this link!</a> Remember, this application runs entirely in your browser- your data never leaves your machine.
 
 **Offline or Downloaded Files:** Just open `index.html` directly in any modern browser (Chrome, Firefox, Safari, Edge). No server required.
 
