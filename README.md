@@ -24,7 +24,7 @@ Track money in vs. money out over time with a combined bar + line chart. Use the
 
 A full-history line chart of assets, liabilities, and net worth — always showing the complete picture regardless of the period filter. Stat cards surface current net worth, total assets, total liabilities, and period-over-period change.
 
-![Net Worth Tracker](https://i.imgur.com/GgclCJI.png)
+![Net Worth Tracker](https://i.imgur.com/FWWDpct.png)
 
 ### 🌊 Money Flow (Sankey)
 
