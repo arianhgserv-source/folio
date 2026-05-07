@@ -632,6 +632,8 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
 
         <!-- Top payees section — rendered by renderIncomeStatement → renderPayees() — Feature 4 -->
         <div class="table-card" id="income-payees" style="margin-top:0"></div>
+        <!-- YoY / MoM comparison panel — rendered by renderComparison() — Feature 22 -->
+        <div class="table-card" id="comparison-panel" style="margin-top:0"></div>
       </div>
 
       <!-- ═══ Cash Flow ════════════════════════════════════════ -->
@@ -669,6 +671,8 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
         </div>
         <!-- Emergency fund gauge — rendered by renderNetWorth() — Feature 6 -->
         <div class="table-card" id="emergency-fund" style="margin-top:0"></div>
+        <!-- Debt Payoff Projector — rendered by renderDebtPayoff() — Feature 24 -->
+        <div class="table-card" id="debt-payoff" style="margin-top:0"></div>
       </div>
 
       <!-- ═══ Account Balances ══════════════════════════════════ -->
@@ -703,8 +707,20 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
                    oninput="applyTxFilter()" style="min-width:180px">
           </div>
           <button class="btn btn-ghost" id="tx-clear-btn" onclick="clearTxFilter()" style="display:none">✕ Clear filters</button>
+          <!-- Payee analysis toggle — Feature 23 -->
+          <div class="cal-view-tabs" style="margin-left:auto">
+            <button class="ptab active" id="tx-tab-list" onclick="setTxView('list')" data-tip="Transaction list">Transactions</button>
+            <button class="ptab" id="tx-tab-payee" onclick="setTxView('payee')" data-tip="Aggregate by payee/merchant">By Payee</button>
+          </div>
         </div>
-        <div class="table-card" id="transactions-table"></div>
+        <!-- Standard transaction table — hidden in payee view -->
+        <div id="tx-list-view">
+          <div class="table-card" id="transactions-table"></div>
+        </div>
+        <!-- Payee analysis table — shown only in payee view — Feature 23 -->
+        <div id="tx-payee-view" style="display:none">
+          <div class="table-card" id="payee-table"></div>
+        </div>
       </div>
 
       <!-- ═══ Balance Lookup ════════════════════════════════════ -->
@@ -770,10 +786,13 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
           <div class="cal-view-tabs">
             <button class="ptab active" id="cal-tab-month" onclick="setCalView('month')" data-tip="Month grid view">Month</button>
             <button class="ptab" id="cal-tab-week" onclick="setCalView('week')" data-tip="Week view with transaction details">Week</button>
+            <button class="ptab" id="cal-tab-heatmap" onclick="setCalView('heatmap')" data-tip="52-week spending intensity heatmap">Heatmap</button>
           </div>
         </div>
         <div class="cal-grid" id="cal-grid"></div>
         <div id="cal-drawer"></div>
+        <!-- Spending heatmap — shown only in heatmap view — Feature 21 -->
+        <div id="heatmap-container" style="display:none"></div>
       </div>
 
     </main>
@@ -832,7 +851,8 @@ let pType   = 'month';    // active period type: 'week' | 'month' | 'quarter' | 
 let pAnchor = new Date(); // a date inside the current period (used as the reference point)
 let charts  = {};         // keyed Chart.js instances; entries are destroyed before recreation
 let calAnchor    = new Date(); // calendar month/week anchor (separate from the report period)
-let calView      = 'month';  // 'month' | 'week' — which calendar layout is active
+let calView      = 'month';  // 'month' | 'week' | 'heatmap' — which calendar layout is active
+let txView       = 'list';   // 'list' | 'payee' — transactions panel display mode
 let txAcctFilter = '';        // transactions panel account filter (exact account name or '')
 let txStatusFilter = ''; // '' = all | 'cleared' | 'pending' | 'unmarked'
 let txSearchFilter = ''; // free-text search across description and account names
@@ -1040,17 +1060,15 @@ function loadFile(file) {
 }
 
 // Startup sequence after a file is loaded:
-//   parse → set pAnchor to last transaction's month → reset filters →
+//   parse → set pAnchor to today (so the dashboard always opens on the current
+//   month regardless of when the last transaction was recorded) → reset filters →
 //   populate filter dropdowns → renderAll() → swap screens.
 function initDashboard(content) {
   allTransactions=parseLedger(content);
-  if(allTransactions.length) {
-    pAnchor = parseDt(allTransactions[allTransactions.length-1].date);
-    calAnchor = new Date(pAnchor.getFullYear(), pAnchor.getMonth(), 1);
-  } else {
-    pAnchor = new Date();
-    calAnchor = new Date();
-  }
+  // Always anchor to today so the initial view is the current month, not the
+  // month of the last transaction (which may be weeks or months in the past).
+  pAnchor   = new Date();
+  calAnchor = new Date();
   pType = 'month';
   document.querySelectorAll('.ptab').forEach(b => b.classList.toggle('active', b.dataset.type === 'month'));
   // Hide custom-range-row on fresh load (period resets to month)
@@ -1361,8 +1379,9 @@ function snapshotAsOf(deltas, ds) {
 function renderCalendar() {
   const deltas = buildDailyDeltas();
   const todayStr = dateStr(new Date());
-  if(calView === 'week') _renderCalWeek(deltas, todayStr);
-  else                   _renderCalMonth(deltas, todayStr);
+  if(calView === 'week')    _renderCalWeek(deltas, todayStr);
+  else if(calView === 'heatmap') renderHeatmap();
+  else                      _renderCalMonth(deltas, todayStr);
 }
 
 // Renders a traditional month grid (Sun–Sat columns, ~5 weeks).
@@ -1492,9 +1511,17 @@ function _renderCalWeek(deltas, todayStr) {
 
 function setCalView(v) {
   calView = v;
-  document.getElementById('cal-tab-month').classList.toggle('active', v==='month');
-  document.getElementById('cal-tab-week').classList.toggle('active',  v==='week');
+  document.getElementById('cal-tab-month').classList.toggle('active',   v==='month');
+  document.getElementById('cal-tab-week').classList.toggle('active',    v==='week');
+  document.getElementById('cal-tab-heatmap').classList.toggle('active', v==='heatmap');
   if(v==='week') calAnchor = weekMonday(calAnchor);
+  // Heatmap has its own container — toggle cal-grid / drawer visibility accordingly
+  document.getElementById('cal-grid').style.display           = v==='heatmap' ? 'none' : '';
+  document.getElementById('cal-drawer').style.display         = v==='heatmap' ? 'none' : '';
+  document.getElementById('heatmap-container').style.display  = v==='heatmap' ? ''     : 'none';
+  // Hide period nav arrows for heatmap (it always shows the trailing 52 weeks)
+  const navBtns = document.querySelectorAll('.cal-nav-btn');
+  navBtns.forEach(b => b.style.visibility = v==='heatmap' ? 'hidden' : '');
   renderCalendar();
 }
 
@@ -1720,6 +1747,8 @@ function renderIncomeStatement(txs) {
   renderSavingsRateTrend();
   // Feature 4: Top payees breakdown for the current period
   renderPayees(txs);
+  // Feature 22: MoM / YoY comparison panel
+  renderComparison(txs, totalInc, totalExp, net);
 }
 
 // ── Period matrix (hledger-style balance view) ──────────────────
@@ -2194,41 +2223,49 @@ function renderNetWorth() {
   const fillPct = Math.min(100, (efMonths / 6) * 100);
 
   efEl.innerHTML = `
-    <div class="tc-hdr" style="padding-bottom:12px">
+    <div class="tc-hdr" style="padding-bottom:14px">
       <h3>Emergency Fund</h3>
       <p>Liquid assets ÷ avg monthly expenses (last 3 months)</p>
     </div>
-    <!-- Gauge bar spans the full card width — no wrapping flex container -->
-    <div style="width:100%">
-      <!-- Filled progress bar: 6 months = 100%, color-coded by funding tier -->
-      <div style="height:10px;background:var(--surface-3);border-radius:99px;overflow:hidden;margin-bottom:8px">
-        <div style="height:100%;width:${fillPct.toFixed(1)}%;background:${tierColor};border-radius:99px;transition:width .4s ease"></div>
+    <!-- Gauge bar + scale: wrapped in padding to match tc-hdr side padding -->
+    <div style="padding:0 22px 20px">
+      <!-- Track: overflow:hidden clips the fill, so no border-radius needed on fill itself -->
+      <div style="position:relative;height:12px;background:var(--surface-3);border-radius:99px;overflow:hidden;margin-bottom:10px">
+        <!-- Filled segment — no inner border-radius; track overflow handles clipping cleanly -->
+        <div style="height:100%;width:${fillPct.toFixed(1)}%;background:${tierColor};transition:width .4s ease"></div>
+        <!-- 3-month target marker: a thin white line at the 50% point -->
+        <div style="position:absolute;top:0;left:50%;width:2px;height:100%;background:rgba(255,255,255,0.6);transform:translateX(-50%)"></div>
       </div>
-      <!-- Scale labels below the bar -->
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-4);margin-bottom:20px">
-        <span>0 mo</span><span>3 mo</span><span>6 mo+</span>
+      <!-- Scale labels aligned to 0%, 50% (3 mo), and 100% (6 mo+) -->
+      <div style="position:relative;height:16px;font-size:11px;color:var(--text-4)">
+        <span style="position:absolute;left:0">0 mo</span>
+        <span style="position:absolute;left:50%;transform:translateX(-50%)">3 mo target</span>
+        <span style="position:absolute;right:0">6 mo+</span>
       </div>
     </div>
-    <!-- Stat cards sit below the gauge in a simple row -->
-    <div style="display:flex;gap:16px;flex-wrap:wrap">
-      <div class="stat-card" style="min-width:120px">
+    <!-- Stat cards sit below the gauge in a stats-row grid -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;padding:0 16px 16px">
+      <div class="stat-card">
         <!-- "Months Covered" replaces startup-y "Runway" — friendlier for home budgeting -->
         <div class="sc-label">Months Covered</div>
         <div class="sc-value" style="color:${tierColor}">${efMonths >= 100 ? '99+' : efMonths.toFixed(1)} mo</div>
         <div class="sc-sub" style="color:${tierColor}">${tierLabel}</div>
       </div>
-      <div class="stat-card" style="min-width:120px">
+      <div class="stat-card">
         <div class="sc-label">Liquid Assets</div>
         <div class="sc-value c-blue">$${fmt(liquidAssets)}</div>
         <div class="sc-sub">non-investment</div>
       </div>
-      <div class="stat-card" style="min-width:120px">
+      <div class="stat-card">
         <div class="sc-label">Avg Monthly Exp</div>
         <div class="sc-value c-red">$${avgMonthlyExp > 0 ? fmt(avgMonthlyExp) : '—'}</div>
         <div class="sc-sub">last ${recentMonths} month${recentMonths !== 1 ? 's' : ''}</div>
       </div>
     </div>
   `;
+
+  // Feature 24: Debt Payoff Projector — uses the same all-time `balances` map
+  renderDebtPayoff(balances);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2293,6 +2330,18 @@ function clearTxFilter() {
   const searchEl = document.getElementById('tx-search');
   if(searchEl) searchEl.value = '';
   document.getElementById('tx-clear-btn').style.display = 'none';
+  renderTransactions(filteredTxs());
+}
+
+// ── Transactions view mode (list vs payee) ────────────────────────
+// Toggles between the chronological transaction list and the payee/merchant
+// aggregation summary. Updates tab buttons and shows/hides the two containers.
+function setTxView(view) {
+  txView = view;
+  document.getElementById('tx-tab-list').classList.toggle('active',  view === 'list');
+  document.getElementById('tx-tab-payee').classList.toggle('active', view === 'payee');
+  document.getElementById('tx-list-view').style.display  = view === 'list'  ? '' : 'none';
+  document.getElementById('tx-payee-view').style.display = view === 'payee' ? '' : 'none';
   renderTransactions(filteredTxs());
 }
 
@@ -2664,6 +2713,523 @@ function ribbonD(x1,y1t,h1,x2,y2t,h2){
 }
 
 // ══════════════════════════════════════════════════════════════════
+// FEATURE 22 — MoM / YoY COMPARISON PANEL
+// ══════════════════════════════════════════════════════════════════
+// Appended below the Top Payees card in the Income Statement panel.
+// Compares the current period totals against:
+//   • Last month: same 1-month window shifted back 1 month
+//   • Prior year: the equivalent calendar month(s) shifted back 12 months
+// Shows income, expenses, net, and savings rate for all three columns.
+function renderComparison(txs, curInc, curExp, curNet) {
+  const el = document.getElementById('comparison-panel');
+  if(!el) return;
+
+  // ── Helper: sum income & expenses for an arbitrary date range ────
+  const sumPeriod = (start, end) => {
+    let inc = 0, exp = 0;
+    for(const tx of allTransactions) {
+      if(tx.date < start || tx.date > end) continue;
+      for(const p of tx.postings) {
+        if(isIncome(p.account))   inc += -(p.amount ?? 0);
+        if(isExpense(p.account))  exp +=  (p.amount ?? 0);
+      }
+    }
+    return { inc, exp, net: inc - exp, rate: inc > 0 ? Math.round((inc - exp) / inc * 100) : 0 };
+  };
+
+  // ── Compute prior-month and prior-year windows ───────────────────
+  // Shift the current period's start/end dates back by 1 month and 12 months.
+  const { start, end } = getPeriodRange();
+  const shiftMonths = (dateStr_, delta) => {
+    const d = new Date(dateStr_ + 'T12:00:00');
+    d.setMonth(d.getMonth() + delta);
+    return dateStr(d);
+  };
+
+  const momStart = shiftMonths(start, -1);
+  const momEnd   = shiftMonths(end,   -1);
+  const yoyStart = shiftMonths(start, -12);
+  const yoyEnd   = shiftMonths(end,   -12);
+
+  const mom = sumPeriod(momStart, momEnd);
+  const yoy = sumPeriod(yoyStart, yoyEnd);
+  const cur = { inc: curInc, exp: curExp, net: curNet,
+                rate: curInc > 0 ? Math.round((curNet / curInc) * 100) : 0 };
+
+  // ── Percentage-change badge helper ───────────────────────────────
+  // Returns colored +X% / –X% HTML; '—' when prior value is zero.
+  const pct = (cur, prior, lowerIsBetter = false) => {
+    if(prior === 0) return `<span style="color:var(--text-4)">—</span>`;
+    const p = ((cur - prior) / Math.abs(prior) * 100);
+    const pos = lowerIsBetter ? p <= 0 : p >= 0; // green when "good" direction
+    const color = pos ? 'var(--c-pos)' : 'var(--c-neg)';
+    return `<span style="color:${color};font-weight:600">${p >= 0 ? '+' : ''}${p.toFixed(1)}%</span>`;
+  };
+
+  // ── Check if comparison periods have any data ────────────────────
+  const hasMoM = mom.inc > 0 || mom.exp > 0;
+  const hasYoY = yoy.inc > 0 || yoy.exp > 0;
+  if(!hasMoM && !hasYoY) { el.innerHTML = ''; return; }
+
+  // ── Build 4-column table: metric | current | last month | prior year ──
+  const row = (label, curVal, momVal, yoyVal, fn, lowerIsBetter = false) => `
+    <tr>
+      <td style="font-size:12.5px;color:var(--text-3);padding:8px 14px;white-space:nowrap">${label}</td>
+      <td class="td-r td-m" style="font-weight:600">${fn(curVal)}</td>
+      ${hasMoM ? `<td class="td-r" style="padding:8px 14px">
+        <div style="font-weight:500">${fn(momVal)}</div>
+        <div style="font-size:11px;margin-top:2px">${pct(curVal, momVal, lowerIsBetter)}</div>
+      </td>` : ''}
+      ${hasYoY ? `<td class="td-r" style="padding:8px 14px">
+        <div style="font-weight:500">${fn(yoyVal)}</div>
+        <div style="font-size:11px;margin-top:2px">${pct(curVal, yoyVal, lowerIsBetter)}</div>
+      </td>` : ''}
+    </tr>`;
+
+  const $  = v => `$${fmt(Math.abs(v))}`;
+  const rt = v => `${v}%`;
+
+  el.innerHTML = `
+    <div class="tc-hdr" style="padding-bottom:12px">
+      <h3>Period Comparison</h3>
+      <p>How this period compares to recent history</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="min-width:340px">
+        <thead><tr>
+          <th style="text-align:left;padding:8px 14px">Metric</th>
+          <th class="td-r" style="padding:8px 14px">This Period</th>
+          ${hasMoM ? `<th class="td-r" style="padding:8px 14px">Prior Month<br><span style="font-size:10px;font-weight:400;color:var(--text-4)">${momStart.slice(0,7)}</span></th>` : ''}
+          ${hasYoY ? `<th class="td-r" style="padding:8px 14px">Prior Year<br><span style="font-size:10px;font-weight:400;color:var(--text-4)">${yoyStart.slice(0,7)}</span></th>` : ''}
+        </tr></thead>
+        <tbody>
+          ${row('Income',       cur.inc,  mom.inc,  yoy.inc,  $)}
+          ${row('Expenses',     cur.exp,  mom.exp,  yoy.exp,  $, true)}
+          ${row('Net',          cur.net,  mom.net,  yoy.net,  v => `${v >= 0 ? '' : '('}$${fmt(Math.abs(v))}${v < 0 ? ')' : ''}`)}
+          ${row('Savings Rate', cur.rate, mom.rate, yoy.rate, rt)}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FEATURE 23 — PAYEE / MERCHANT ANALYSIS
+// ══════════════════════════════════════════════════════════════════
+// Rendered in the Transactions panel when "By Payee" tab is active.
+// Groups period-filtered transactions by description (payee/merchant),
+// then aggregates total expenses, income, transaction count, average, and
+// most-recent date. Clicking a payee row filters the list view to that payee.
+function renderPayeeAnalysis(txs) {
+  // Re-apply same filter stack as renderTransactions so payee view stays consistent
+  let filtered = txAcctFilter
+    ? txs.filter(t => t.postings.some(p =>
+        p.account === txAcctFilter || p.account.startsWith(txAcctFilter + ':')))
+    : txs;
+  if(txStatusFilter) filtered = filtered.filter(t => t.status === txStatusFilter);
+  if(txSearchFilter) filtered = filtered.filter(t =>
+    (t.description || '').toLowerCase().includes(txSearchFilter) ||
+    t.postings.some(p => p.account.toLowerCase().includes(txSearchFilter)));
+
+  // ── Aggregate by payee name ──────────────────────────────────────
+  const map = {};
+  for(const tx of filtered) {
+    const key = (tx.description || '(no description)').trim();
+    if(!map[key]) map[key] = { expense: 0, income: 0, count: 0, last: '' };
+    map[key].count++;
+    if(tx.date > map[key].last) map[key].last = tx.date;
+    for(const p of tx.postings) {
+      if(isExpense(p.account)) map[key].expense += (p.amount ?? 0);
+      if(isIncome(p.account))  map[key].income  += -(p.amount ?? 0);
+    }
+  }
+
+  // Sort by total expense descending (expense-centric view for home budgeting)
+  const rows = Object.entries(map).sort((a, b) => b[1].expense - a[1].expense);
+
+  const el = document.getElementById('payee-table');
+  if(!el) return;
+
+  if(!rows.length) {
+    el.innerHTML = `<div class="empty-state"><div class="em-icon">🏪</div>No transactions match the current filters.</div>`;
+    return;
+  }
+
+  // ── Summary counts at the top ─────────────────────────────────────
+  const totalPayees  = rows.length;
+  const totalExpense = rows.reduce((s, [, v]) => s + v.expense, 0);
+  const totalIncome  = rows.reduce((s, [, v]) => s + v.income,  0);
+
+  // ── Build table ───────────────────────────────────────────────────
+  // Clicking a payee name switches back to list view and applies a text search.
+  let html = `
+    <div class="tc-hdr" style="padding-bottom:12px">
+      <h3>Payee Summary</h3>
+      <p>${totalPayees} payee${totalPayees !== 1 ? 's' : ''} · $${fmt(totalExpense)} total expenses</p>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Payee</th>
+        <th class="td-r">Txns</th>
+        <th class="td-r">Expenses</th>
+        <th class="td-r">Avg / Txn</th>
+        <th class="td-r">Income</th>
+        <th class="td-r">Last</th>
+      </tr></thead>
+      <tbody>`;
+
+  for(const [name, v] of rows) {
+    const avg = v.count > 0 ? v.expense / v.count : 0;
+    const nameEsc = name.replace(/'/g, "\\'");
+    html += `<tr style="cursor:pointer" onclick="jumpToPayee('${nameEsc}')" title="Filter transactions to ${name}">
+      <td style="font-weight:500;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</td>
+      <td class="td-r" style="color:var(--text-3);font-size:12px">${v.count}</td>
+      <td class="td-r td-m c-red">${v.expense > 0 ? '$'+fmt(v.expense) : '—'}</td>
+      <td class="td-r" style="color:var(--text-3);font-size:12px">${avg > 0 ? '$'+fmt(avg) : '—'}</td>
+      <td class="td-r td-m c-green">${v.income > 0 ? '$'+fmt(v.income) : '—'}</td>
+      <td class="td-r" style="font-size:12px;color:var(--text-4);white-space:nowrap">${v.last || '—'}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
+// Switches to list view and applies a free-text payee search.
+// Called when user clicks a row in the payee analysis table.
+function jumpToPayee(name) {
+  txView = 'list';
+  document.getElementById('tx-tab-list').classList.add('active');
+  document.getElementById('tx-tab-payee').classList.remove('active');
+  document.getElementById('tx-list-view').style.display  = '';
+  document.getElementById('tx-payee-view').style.display = 'none';
+  // Inject the payee name into the search box and apply filters
+  const searchEl = document.getElementById('tx-search');
+  if(searchEl) { searchEl.value = name; txSearchFilter = name.toLowerCase(); }
+  document.getElementById('tx-clear-btn').style.display = '';
+  renderTransactions(filteredTxs());
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FEATURE 24 — DEBT PAYOFF PROJECTOR
+// ══════════════════════════════════════════════════════════════════
+// Shown in the Net Worth panel below the Emergency Fund gauge.
+// For each liability account it computes:
+//   • Current balance (from the full-history balances map)
+//   • Average monthly payment over the last 6 months of data
+//   • Projected payoff date at that payment rate
+// A progress bar shows how much of the original peak balance has been paid off.
+function renderDebtPayoff(balances) {
+  const el = document.getElementById('debt-payoff');
+  if(!el) return;
+
+  // Collect liability accounts that carry a negative balance (money owed)
+  const liabAccts = Object.entries(balances)
+    .filter(([a, b]) => isLiability(a) && b < 0) // negative = owed
+    .map(([a, b]) => ({ acct: a, bal: b }))
+    .sort((a, b) => a.bal - b.bal); // most negative first
+
+  if(!liabAccts.length) { el.innerHTML = ''; return; }
+
+  // ── Compute average monthly payment per account (last 6 months) ───
+  // "Payment" = any positive posting to a liability (reduces what is owed).
+  const now     = new Date();
+  const cutoff  = new Date(now.getFullYear(), now.getMonth() - 5, 1); // 6-month window
+  const cutStr  = dateStr(cutoff).slice(0, 7); // "YYYY-MM"
+
+  const rows = liabAccts.map(({ acct, bal }) => {
+    // Sum payments (positive postings = reducing liability) by month
+    const byMonth = {};
+    for(const tx of allTransactions) {
+      const mo = tx.date.slice(0, 7);
+      if(mo < cutStr) continue;
+      for(const p of tx.postings) {
+        if(p.account !== acct) continue;
+        const amt = p.amount ?? 0;
+        if(amt > 0) byMonth[mo] = (byMonth[mo] ?? 0) + amt; // payments only
+      }
+    }
+    const paymentMonths = Object.values(byMonth);
+    const avgPayment = paymentMonths.length > 0
+      ? paymentMonths.reduce((s, v) => s + v, 0) / paymentMonths.length
+      : 0;
+
+    // Current balance is negative (owed); flip sign for display
+    const owed = -bal;
+
+    // Compute peak balance (most the account ever owed) for progress bar baseline.
+    // Stream through history accumulating the balance; track lowest point (most negative).
+    let running = 0, peak = 0;
+    for(const tx of allTransactions) {
+      for(const p of tx.postings) {
+        if(p.account !== acct) continue;
+        running += (p.amount ?? 0);
+        if(running < peak) peak = running; // more negative = larger debt
+      }
+    }
+    const peakOwed = -peak; // positive: max ever owed
+    const paidOff  = Math.max(0, peakOwed - owed); // amount paid so far
+    const pct      = peakOwed > 0 ? Math.min(100, (paidOff / peakOwed) * 100) : 0;
+
+    // Project payoff date: months remaining = owed / avgPayment
+    let payoffLabel = '—';
+    if(avgPayment > 0 && owed > 0) {
+      const monthsLeft = owed / avgPayment;
+      const payoffDate = new Date(now.getFullYear(), now.getMonth() + Math.ceil(monthsLeft), 1);
+      payoffLabel = payoffDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    } else if(owed <= 0) {
+      payoffLabel = 'Paid off';
+    }
+
+    return { acct, owed, avgPayment, pct, payoffLabel, peakOwed };
+  });
+
+  // ── Render ─────────────────────────────────────────────────────────
+  let html = `
+    <div class="tc-hdr" style="padding-bottom:12px">
+      <h3>Debt Payoff Projector</h3>
+      <p>Based on avg monthly payments over the last 6 months</p>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Account</th>
+        <th class="td-r">Balance</th>
+        <th class="td-r">Avg Payment / Mo</th>
+        <th class="td-r">Projected Payoff</th>
+      </tr></thead>
+      <tbody>`;
+
+  for(const r of rows) {
+    // Color: fully on track = green, has remaining balance = amber/red
+    const barColor = r.pct >= 90 ? 'var(--c-pos)' : r.pct >= 50 ? '#f59e0b' : 'var(--c-neg)';
+    html += `<tr>
+      <td>
+        <div style="font-weight:500;font-size:13px">${shortAcct(r.acct)}</div>
+        <div style="font-size:11px;color:var(--text-4);margin-bottom:5px">${r.acct}</div>
+        <!-- Progress bar: filled = paid off so far, relative to peak balance -->
+        <div style="height:5px;background:var(--surface-3);border-radius:99px;overflow:hidden;margin-top:4px;max-width:200px">
+          <div style="height:100%;width:${r.pct.toFixed(1)}%;background:${barColor}"></div>
+        </div>
+        <div style="font-size:10px;color:var(--text-4);margin-top:3px">${r.pct.toFixed(0)}% paid off</div>
+      </td>
+      <td class="td-r td-m c-red" style="vertical-align:top;padding-top:10px">$${fmt(r.owed)}</td>
+      <td class="td-r" style="vertical-align:top;padding-top:10px;color:var(--text-2)">
+        ${r.avgPayment > 0 ? '$'+fmt(r.avgPayment) : '<span style="color:var(--text-4)">No recent data</span>'}
+      </td>
+      <td class="td-r" style="vertical-align:top;padding-top:10px;font-weight:600;color:${barColor}">${r.payoffLabel}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FEATURE 21 — SPENDING HEATMAP
+// ══════════════════════════════════════════════════════════════════
+// GitHub-style 52×7 day grid displayed in the Calendar panel's "Heatmap" view.
+// Each cell represents one day of the trailing 52 weeks. Cell color intensity
+// reflects daily expense total relative to the 75th-percentile day (so most
+// cells have meaningful color; extreme outliers don't wash out everything else).
+// Hovering a cell shows date, expense total, and individual transactions.
+function renderHeatmap() {
+  const el = document.getElementById('heatmap-container');
+  if(!el) return;
+
+  // ── Aggregate daily expense totals from full transaction history ───
+  const daily = {};
+  for(const tx of allTransactions) {
+    let exp = 0;
+    for(const p of tx.postings) {
+      if(isExpense(p.account)) exp += (p.amount ?? 0);
+    }
+    if(exp > 0) daily[tx.date] = (daily[tx.date] ?? 0) + exp;
+  }
+
+  // ── Build 52-week window: from 364 days ago through today ─────────
+  const today   = new Date();
+  today.setHours(0, 0, 0, 0);
+  // Align start to the beginning of the Sunday-starting week containing (today - 364 days)
+  const startRaw = new Date(today);
+  startRaw.setDate(startRaw.getDate() - 363);
+  // Roll back to Sunday so columns are full Sun–Sat weeks
+  const dow0  = startRaw.getDay(); // 0=Sun
+  const start = new Date(startRaw);
+  start.setDate(start.getDate() - dow0);
+
+  // ── Collect all days in the window ────────────────────────────────
+  const days = [];
+  for(let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+    const ds  = dateStr(new Date(d));
+    days.push({ ds, exp: daily[ds] ?? 0, date: new Date(d) });
+  }
+
+  // ── Compute 75th-percentile spend for color scaling ───────────────
+  // Using P75 instead of max prevents one big outlier (e.g. $3k rent) from
+  // making all the grocery cells look the same dim color.
+  const nonZero = days.map(d => d.exp).filter(v => v > 0).sort((a, b) => a - b);
+  const p75     = nonZero.length > 0
+    ? nonZero[Math.floor(nonZero.length * 0.75)]
+    : 1;
+
+  // ── Color function: 5 intensity levels from near-zero to max ──────
+  // Uses indigo/accent palette that matches the app theme.
+  const cellColor = (exp) => {
+    if(exp === 0) return 'var(--surface-3)';
+    const t = Math.min(1, exp / p75);
+    if(t < 0.15) return 'rgba(99,102,241,0.18)';
+    if(t < 0.35) return 'rgba(99,102,241,0.36)';
+    if(t < 0.60) return 'rgba(99,102,241,0.55)';
+    if(t < 0.85) return 'rgba(99,102,241,0.75)';
+    return 'rgba(99,102,241,0.95)';
+  };
+
+  // ── Build the SVG grid ────────────────────────────────────────────
+  // Layout: 53 columns (weeks) × 7 rows (days), left margin for day labels,
+  // top margin for month labels.
+  const CW = 14, CH = 14, GAP = 2; // cell width, height, gap
+  const ML = 28, MT = 22;          // left margin (day labels), top margin (month labels)
+  const cols = Math.ceil(days.length / 7) + 1;
+  const W  = ML + cols * (CW + GAP);
+  const H  = MT + 7 * (CH + GAP) + 32; // extra 32px for legend
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;max-width:${W}px;display:block;overflow:visible">`;
+
+  // Day-of-week labels on the left (Mon / Wed / Fri to avoid crowding)
+  const dowLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  [1, 3, 5].forEach(row => {
+    svg += `<text x="${ML - 4}" y="${MT + row * (CH + GAP) + CH - 3}"
+      text-anchor="end" font-size="9" fill="var(--text-4)" font-family="system-ui">${dowLabels[row]}</text>`;
+  });
+
+  // Month labels across the top: print month name at the first column of each new month
+  let prevMonth = null;
+  days.forEach((d, i) => {
+    if(d.date.getDate() === 1 || i === 0) {
+      const col = Math.floor(i / 7);
+      const mo  = d.date.toLocaleDateString('en-US', { month: 'short' });
+      if(mo !== prevMonth) {
+        svg += `<text x="${ML + col * (CW + GAP) + CW / 2}" y="${MT - 6}"
+          text-anchor="middle" font-size="9" fill="var(--text-3)" font-family="system-ui">${mo}</text>`;
+        prevMonth = mo;
+      }
+    }
+  });
+
+  // Tooltip data stored as a JS map keyed by cell id for mouseover events
+  const tooltipData = {};
+
+  // Day cells: column = week index, row = day-of-week (0=Sun)
+  days.forEach((d, i) => {
+    const col  = Math.floor(i / 7);
+    const row  = d.date.getDay(); // 0=Sun
+    const x    = ML + col * (CW + GAP);
+    const y    = MT + row * (CH + GAP);
+    const color = cellColor(d.exp);
+    const id   = `hm-${i}`;
+    tooltipData[id] = d;
+
+    svg += `<rect id="${id}" class="hm-cell" x="${x}" y="${y}" width="${CW}" height="${CH}"
+      rx="2" fill="${color}" style="cursor:${d.exp > 0 ? 'pointer' : 'default'}"
+      data-date="${d.ds}" data-exp="${d.exp.toFixed(2)}"/>`;
+  });
+
+  // ── Legend ─────────────────────────────────────────────────────────
+  const legendY = MT + 7 * (CH + GAP) + 14;
+  svg += `<text x="${ML}" y="${legendY + 10}" font-size="9" fill="var(--text-4)" font-family="system-ui">Less</text>`;
+  const lgCols = ['var(--surface-3)','rgba(99,102,241,0.18)','rgba(99,102,241,0.36)',
+                  'rgba(99,102,241,0.55)','rgba(99,102,241,0.75)','rgba(99,102,241,0.95)'];
+  lgCols.forEach((c, i) => {
+    svg += `<rect x="${ML + 28 + i * (CW + GAP)}" y="${legendY}" width="${CW}" height="${CW}" rx="2" fill="${c}"/>`;
+  });
+  svg += `<text x="${ML + 28 + lgCols.length * (CW + GAP) + 4}" y="${legendY + 10}"
+    font-size="9" fill="var(--text-4)" font-family="system-ui">More</text>`;
+
+  svg += `</svg>`;
+
+  // ── Summary stats above the grid ──────────────────────────────────
+  const totalExp   = days.reduce((s, d) => s + d.exp, 0);
+  const activeDays = nonZero.length;
+  const avgOnDay   = activeDays > 0 ? totalExp / activeDays : 0;
+  const maxDay     = nonZero.length > 0 ? nonZero[nonZero.length - 1] : 0;
+
+  el.innerHTML = `
+    <div style="padding:20px 22px 0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:13.5px;font-weight:600;color:var(--text-1)">Spending Heatmap</div>
+          <div style="font-size:12px;color:var(--text-4);margin-top:2px">Daily expense intensity · trailing 52 weeks</div>
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <div class="stat-card" style="padding:10px 14px;min-width:110px">
+            <div class="sc-label">Total Spend</div>
+            <div class="sc-value c-red" style="font-size:16px">$${fmt(totalExp)}</div>
+          </div>
+          <div class="stat-card" style="padding:10px 14px;min-width:110px">
+            <div class="sc-label">Active Days</div>
+            <div class="sc-value" style="font-size:16px">${activeDays}</div>
+          </div>
+          <div class="stat-card" style="padding:10px 14px;min-width:110px">
+            <div class="sc-label">Avg Spend Day</div>
+            <div class="sc-value c-red" style="font-size:16px">$${fmt(avgOnDay)}</div>
+          </div>
+          <div class="stat-card" style="padding:10px 14px;min-width:110px">
+            <div class="sc-label">Peak Day</div>
+            <div class="sc-value c-red" style="font-size:16px">$${fmt(maxDay)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:0 16px 20px;overflow-x:auto" id="hm-svg-wrap">
+      ${svg}
+    </div>
+    <!-- Hover tooltip -->
+    <div id="hm-tooltip" style="display:none;position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;pointer-events:none;z-index:200;box-shadow:0 4px 12px var(--sh-md)"></div>
+  `;
+
+  // ── Wire up hover tooltips ─────────────────────────────────────────
+  // Each cell stores date + expense in data attributes; tooltip fetches them on hover.
+  const tt = document.getElementById('hm-tooltip');
+  el.querySelectorAll('.hm-cell').forEach(cell => {
+    const ds  = cell.dataset.date;
+    const exp = parseFloat(cell.dataset.exp);
+    if(!ds) return;
+
+    cell.addEventListener('mouseenter', e => {
+      const dateObj = new Date(ds + 'T12:00:00');
+      const label   = dateObj.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+      // Find transactions for this day to list payees
+      const txList = allTransactions.filter(t => t.date === ds && t.postings.some(p => isExpense(p.account)));
+      const txRows = txList.slice(0, 5).map(t => {
+        const amt = t.postings.filter(p => isExpense(p.account)).reduce((s,p) => s+(p.amount??0), 0);
+        return `<div style="margin-top:3px;color:var(--text-3)">${t.description || '—'} <span style="color:var(--c-neg)">$${fmt(amt)}</span></div>`;
+      }).join('');
+      const more = txList.length > 5 ? `<div style="color:var(--text-4);margin-top:3px">+${txList.length - 5} more</div>` : '';
+      tt.innerHTML = `
+        <div style="font-weight:600;color:var(--text-1)">${label}</div>
+        ${exp > 0
+          ? `<div style="color:var(--c-neg);font-size:13px;margin-top:2px">$${fmt(exp)} spent</div>${txRows}${more}`
+          : `<div style="color:var(--text-4);margin-top:2px">No expenses</div>`}`;
+      tt.style.display = 'block';
+    });
+    cell.addEventListener('mousemove', e => {
+      tt.style.left = (e.clientX + 14) + 'px';
+      tt.style.top  = (e.clientY - 60) + 'px';
+    });
+    cell.addEventListener('mouseleave', () => { tt.style.display = 'none'; });
+    // Clicking a spending day jumps to Transactions filtered to that date
+    if(exp > 0) {
+      cell.addEventListener('click', () => {
+        txSearchFilter = ds;
+        const searchEl = document.getElementById('tx-search');
+        if(searchEl) searchEl.value = ds;
+        document.getElementById('tx-clear-btn').style.display = '';
+        renderTransactions(filteredTxs());
+        showPanel('transactions');
+      });
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
 // ACCOUNT BALANCES
 // ══════════════════════════════════════════════════════════════════
 // Renders a balance snapshot for the filtered period: sums all postings in txs
@@ -2754,6 +3320,10 @@ function renderAccounts(txs) {
 // Both filters compose (AND). Postings for the highlighted account get the
 // tx-posting-hi CSS class. Cleared/pending transactions show a colored status badge.
 function renderTransactions(txs) {
+  // In payee-aggregation view, delegate to the payee renderer instead.
+  // Both views share the same filter stack so filters apply consistently.
+  if(txView === 'payee') { renderPayeeAnalysis(txs); return; }
+
   // Apply account filter: keep transactions that touch the selected account OR any
   // sub-account under it. Prefix matching (startsWith + ':') means clicking a group
   // header like "Assets:Checking" correctly shows all "Assets:Checking:*" postings,
