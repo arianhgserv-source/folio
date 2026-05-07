@@ -3,7 +3,7 @@
 <h1 align="center">Folio — hLedger Reader</h1>
 <p align="center"><b>Folio</b> is a zero-install, single-file financial dashboard for <a href="https://hledger.org/">hLedger</a> plain-text accounting files. Drop in your <code>.ledger</code> file and instantly explore your finances through interactive charts, tables, and a daily calendar — all running entirely inside your browser. Nothing is ever uploaded to a server.</p>
 
-<h3 align="center"><a href="https://arianhgserv-source.github.io/folio/">Use Folio</a> • <a href="https://github.com/arianhgserv-source/folio#features">Features</a> • <a href="https://github.com/arianhgserv-source/folio#getting-started"> Getting Started</a> • <a href=https://github.com/arianhgserv-source/folio#privacy">Privacy</a> </h3> 
+<h3 align="center"><a href="https://arianhgserv-source.github.io/folio/">📘 Use Folio</a> • <a href="https://github.com/arianhgserv-source/folio#features">✨ Features</a> • <a href="https://github.com/arianhgserv-source/folio#getting-started"> 🚀 Getting Started</a> • <a href=https://github.com/arianhgserv-source/folio#privacy">🔒 Privacy</a> </h3> 
 
 ---
 ## Description
