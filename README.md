@@ -1,6 +1,9 @@
+![Banner Social Image](https://i.imgur.com/D1PRVtF.png)
 
-# Folio — hLedger Reader
-**Folio** is a zero-install, single-file financial dashboard for [hLedger](https://hledger.org/) plain-text accounting files. Drop in your `.ledger` file and instantly explore your finances through interactive charts, tables, and a daily calendar — all running entirely inside your browser. Nothing is ever uploaded to a server.
+<h1 align="center">Folio — hLedger Reader</h1>
+<p align="center">Folio** is a zero-install, single-file financial dashboard for [hLedger](https://hledger.org/) plain-text accounting files. Drop in your `.ledger` file and instantly explore your finances through interactive charts, tables, and a daily calendar — all running entirely inside your browser. Nothing is ever uploaded to a server.</p>
+
+<h3 align="center"><a href="https://arianhgserv-source.github.io/folio/">Use Folio</a> • <a href="https://github.com/arianhgserv-source/folio#features">Features</a> • <a href="https://github.com/arianhgserv-source/folio#getting-started"> Getting Started</a> • <a href=https://github.com/arianhgserv-source/folio#privacy">Privacy</a> </h3> 
 
 ---
 ## Description
@@ -67,7 +70,8 @@ Switch between **Week, Month, Quarter, Year**, and **All Time** views with a sin
 
 ## Getting Started
 
-**Quick Start:** You can use Folio by simply [visiting this link!](https://arianhgserv-source.github.io/folio/) Remember, this is a browser based application- your data never leaves your machine.
+**Quick Start:** You can use Folio by simply [visiting this link!](https://arianhgserv-source.github.io/folio/) Remember, this is a browser based application- your data never leaves your machine.\
+
 **Offline or Downloaded Files:** Just open `index.html` directly in any modern browser (Chrome, Firefox, Safari, Edge). No server required.
 
 ### Loading your data
