@@ -246,6 +246,11 @@ html.dark .c-blue { color:#60a5fa; }
 .c-slate  { color:var(--text-3); }
 .bg-none  { background:transparent !important; }
 
+/* ─── Gauge / progress bar ───────────────────────────────────────── */
+/* Used by the emergency fund gauge in the Net Worth panel */
+.gauge-warn { color: #f59e0b; }
+html.dark .gauge-warn { color: #fbbf24; }
+
 /* ─── Empty state ────────────────────────────────────────────────── */
 .empty-state { text-align:center; padding:48px 20px; color:var(--text-4); font-size:14px; }
 .empty-state .em-icon { font-size:32px; margin-bottom:8px; }
@@ -502,11 +507,18 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
         <button class="ptab" data-type="quarter" onclick="setPeriodType('quarter')" data-tip="View one quarter at a time">Qtr</button>
         <button class="ptab" data-type="year"    onclick="setPeriodType('year')"    data-tip="View one year at a time">Yr</button>
         <button class="ptab" data-type="all"     onclick="setPeriodType('all')"     data-tip="View all transactions">All</button>
+        <button class="ptab" data-type="custom"  onclick="setPeriodType('custom')"  data-tip="Set a custom date range">Custom</button>
       </div>
       <div class="pnav">
         <button class="pnav-btn" id="btn-prev" onclick="shiftPeriod(-1)">‹</button>
         <span class="pnav-label" id="period-label">—</span>
         <button class="pnav-btn" id="btn-next" onclick="shiftPeriod(1)">›</button>
+      </div>
+      <!-- Hidden row that appears when Custom period type is selected -->
+      <div id="custom-range-row" style="display:none;align-items:center;gap:6px;margin-left:4px">
+        <input type="date" id="custom-start" class="lk-date-input" style="width:130px;font-size:13px;padding:5px 9px" onchange="applyCustomRange()">
+        <span style="color:var(--text-4);font-size:13px">→</span>
+        <input type="date" id="custom-end" class="lk-date-input" style="width:130px;font-size:13px;padding:5px 9px" onchange="applyCustomRange()">
       </div>
     </div>
 
@@ -607,8 +619,19 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
           <div class="matrix-wrap" id="matrix-wrap"></div>
         </div>
 
+        <!-- Savings rate trend — monthly savings % over all history — Feature 5 -->
+        <div class="chart-card">
+          <div class="chart-card-hdr">
+            <div><h3>Savings Rate Trend</h3><p>Monthly savings rate (%) — full history</p></div>
+          </div>
+          <div class="chart-wrap" style="height:180px"><canvas id="savingsrate-chart"></canvas></div>
+        </div>
+
         <!-- Detail table -->
         <div class="table-card" id="income-table"></div>
+
+        <!-- Top payees section — rendered by renderIncomeStatement → renderPayees() — Feature 4 -->
+        <div class="table-card" id="income-payees" style="margin-top:0"></div>
       </div>
 
       <!-- ═══ Cash Flow ════════════════════════════════════════ -->
@@ -644,6 +667,8 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
           <div class="chart-card-hdr"><div><h3>Net Worth Trend</h3><p>Assets · Liabilities · Net Worth</p></div></div>
           <div class="chart-wrap" style="height:300px"><canvas id="networth-chart"></canvas></div>
         </div>
+        <!-- Emergency fund gauge — rendered by renderNetWorth() — Feature 6 -->
+        <div class="table-card" id="emergency-fund" style="margin-top:0"></div>
       </div>
 
       <!-- ═══ Account Balances ══════════════════════════════════ -->
@@ -670,6 +695,12 @@ html.dark .tx-status-pending { background:rgba(234,179,8,.15); color:#fbbf24; }
               <option value="pending">! Pending (!)</option>
               <option value="unmarked">○ Unmarked</option>
             </select>
+          </div>
+          <!-- Free-text search input — Feature 2 -->
+          <div class="cf-filter-bar">
+            <label for="tx-search">Search</label>
+            <input type="search" id="tx-search" class="cf-filter-select" placeholder="Description or account…"
+                   oninput="applyTxFilter()" style="min-width:180px">
           </div>
           <button class="btn btn-ghost" id="tx-clear-btn" onclick="clearTxFilter()" style="display:none">✕ Clear filters</button>
         </div>
@@ -804,6 +835,9 @@ let calAnchor    = new Date(); // calendar month/week anchor (separate from the 
 let calView      = 'month';  // 'month' | 'week' — which calendar layout is active
 let txAcctFilter = '';        // transactions panel account filter (exact account name or '')
 let txStatusFilter = ''; // '' = all | 'cleared' | 'pending' | 'unmarked'
+let txSearchFilter = ''; // free-text search across description and account names
+let customStart = ''; // ISO date string for custom range start (Feature 1)
+let customEnd   = ''; // ISO date string for custom range end (Feature 1)
 
 // ─── Live file-watch state ────────────────────────────────────────
 // These track whether the File System Access API is available and whether
@@ -862,6 +896,9 @@ function getPeriodRange() {
     }
     case 'year':
       return { start:`${y}-01-01`, end:`${y}-12-31` };
+    case 'custom':
+      // Return user-specified range; fall back to all-time if either end is missing
+      return { start: customStart||'1900-01-01', end: customEnd||'2999-12-31' };
     default: // all
       return { start:'1900-01-01', end:'2999-12-31' };
   }
@@ -877,20 +914,35 @@ function filteredTxs() {
 }
 
 function setPeriodType(type) {
-  pType=type;
-  document.querySelectorAll('.ptab').forEach(b=>b.classList.toggle('active',b.dataset.type===type));
-  const nav=type!=='all';
-  document.getElementById('btn-prev').disabled=!nav;
-  document.getElementById('btn-next').disabled=!nav;
+  pType = type;
+  // Highlight the matching ptab
+  document.querySelectorAll('.ptab').forEach(b => b.classList.toggle('active', b.dataset.type === type));
+  // Show/hide the custom date input row based on mode
+  const customRow = document.getElementById('custom-range-row');
+  if(customRow) customRow.style.display = (type === 'custom') ? 'flex' : 'none';
+  // Disable prev/next navigation for 'all' and 'custom' modes (no sensible shift)
+  const nav = (type !== 'all' && type !== 'custom');
+  document.getElementById('btn-prev').disabled = !nav;
+  document.getElementById('btn-next').disabled = !nav;
   renderAll();
 }
 
 function shiftPeriod(dir) {
-  if(pType==='all') return;
+  // Neither 'all' nor 'custom' have a meaningful shift direction
+  if(pType==='all' || pType==='custom') return;
   const shifts={'week':7,'month':1,'quarter':3,'year':12};
   if(pType==='week') pAnchor=addDays(pAnchor,dir*7);
   else               pAnchor=addMo(pAnchor,dir*(shifts[pType]||1));
   renderAll();
+}
+
+// Reads the custom date input values and triggers a full re-render.
+// Called by the onchange handlers on the custom date pickers.
+// Only renders when BOTH start and end are filled to avoid partial-range renders.
+function applyCustomRange() {
+  customStart = document.getElementById('custom-start').value;
+  customEnd   = document.getElementById('custom-end').value;
+  if(customStart && customEnd) renderAll();
 }
 
 function periodLabel() {
@@ -905,6 +957,11 @@ function periodLabel() {
     case 'month':   return a.toLocaleDateString('en-US',{month:'long',year:'numeric'});
     case 'quarter': return `Q${Math.floor(a.getMonth()/3)+1} ${a.getFullYear()}`;
     case 'year':    return String(a.getFullYear());
+    case 'custom':
+      // Show "start → end" when both are set, otherwise a generic label
+      return (customStart && customEnd)
+        ? `${customStart} → ${customEnd}`
+        : 'Custom Range';
     default:        return 'All Time';
   }
 }
@@ -994,15 +1051,24 @@ function initDashboard(content) {
     pAnchor = new Date();
     calAnchor = new Date();
   }
-  pType='month';
-  document.querySelectorAll('.ptab').forEach(b=>b.classList.toggle('active',b.dataset.type==='month'));
+  pType = 'month';
+  document.querySelectorAll('.ptab').forEach(b => b.classList.toggle('active', b.dataset.type === 'month'));
+  // Hide custom-range-row on fresh load (period resets to month)
+  const customRow = document.getElementById('custom-range-row');
+  if(customRow) customRow.style.display = 'none';
+  // Re-enable prev/next nav (reset from any previous custom/all state)
+  document.getElementById('btn-prev').disabled = false;
+  document.getElementById('btn-next').disabled = false;
   // Default lookup date to today
-  document.getElementById('lk-date').value=dateStr(new Date());
+  document.getElementById('lk-date').value = dateStr(new Date());
   populateLookupAccounts();
   populateCFAccounts();
   populateTxAccounts();
   txAcctFilter   = '';
   txStatusFilter = '';
+  txSearchFilter = '';
+  // Note: customStart/customEnd are intentionally NOT reset here —
+  // they should persist across live-reload sessions as the user set them.
   renderAll();
   document.getElementById('upload-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
@@ -1093,25 +1159,42 @@ function shortAcct(a){ return a.split(':').pop()||a; }
 // emit a lightweight group-header row followed by indented leaf rows; singletons
 // appear as flat rows with no indent. Returns [{fullAcct, label, indent, isGroupHeader}].
 // fullAcct is null on group-header rows (no clickable balance).
+// Converts a flat list of full account names into display rows with optional
+// group headers. When multiple accounts share the same first sub-segment
+// (e.g. "Assets:Checking:A" and "Assets:Checking:B" both start with "Checking"),
+// a clickable group-header row is emitted first, followed by indented leaf rows.
+//
+// Each row has:
+//   fullAcct   — the full account path for filtering (never null, even for headers)
+//   label      — the short display label shown in the table
+//   indent     — 0 = top-level, 1 = sub-level under a group header
+//   isGroupHeader — true for the collapsible section header row
+//
+// Group headers receive a "parent prefix" fullAcct (e.g. "Assets:Checking")
+// so clicking them filters to ALL accounts whose path starts with that prefix.
 function buildAcctRows(accts) {
   const withSegs = accts.map(a => ({ full:a, segs:a.split(':').slice(1) }));
   const firstCount = {};
-  for(const{segs,full} of withSegs){
-    const k=segs[0]||full; firstCount[k]=(firstCount[k]||0)+1;
+  for (const { segs, full } of withSegs) {
+    const k = segs[0] || full; firstCount[k] = (firstCount[k] || 0) + 1;
   }
-  const rows=[], seen=new Set();
-  for(const{full,segs} of withSegs){
-    const firstSeg = segs[0]||full;
-    const grouped  = firstCount[firstSeg]>1;
-    if(grouped){
-      if(!seen.has(firstSeg)){
+  const rows = [], seen = new Set();
+  for (const { full, segs } of withSegs) {
+    const firstSeg  = segs[0] || full;
+    const grouped   = firstCount[firstSeg] > 1;
+    if (grouped) {
+      if (!seen.has(firstSeg)) {
         seen.add(firstSeg);
-        rows.push({fullAcct:null, label:firstSeg, indent:0, isGroupHeader:true});
+        // Build parent prefix = type segment + firstSeg (e.g. "Assets:Checking")
+        // so clicking the header filters all "Assets:Checking:*" accounts at once.
+        const typePrefix  = full.split(':')[0]; // e.g. "Assets"
+        const parentAcct  = typePrefix + ':' + firstSeg; // e.g. "Assets:Checking"
+        rows.push({ fullAcct: parentAcct, label: firstSeg, indent: 0, isGroupHeader: true });
       }
-      const leaf = segs.length>1 ? segs.slice(1).join(':') : segs[0]||full;
-      rows.push({fullAcct:full, label:leaf, indent:1, isGroupHeader:false});
+      const leaf = segs.length > 1 ? segs.slice(1).join(':') : segs[0] || full;
+      rows.push({ fullAcct: full, label: leaf, indent: 1, isGroupHeader: false });
     } else {
-      rows.push({fullAcct:full, label:firstSeg, indent:0, isGroupHeader:false});
+      rows.push({ fullAcct: full, label: firstSeg, indent: 0, isGroupHeader: false });
     }
   }
   return rows;
@@ -1536,12 +1619,43 @@ function renderIncomeStatement(txs) {
   const net      = totalInc-totalExp;
   const savRate  = totalInc>0?Math.round((net/totalInc)*100):0;
 
+  // ── Feature 7: Prior-year equivalent period for YoY comparison ────────────
+  // Shift the current period dates back exactly 12 months to get the comparison window
+  const {start, end} = getPeriodRange();
+  const pyStart = start.replace(/^(\d{4})/, y => String(+y - 1));
+  const pyEnd   = end.replace(/^(\d{4})/, y => String(+y - 1));
+  const pyTxs   = allTransactions.filter(t => t.date >= pyStart && t.date <= pyEnd);
+  const pyIncome = {}, pyExpenses = {};
+  for(const tx of pyTxs) for(const p of tx.postings) {
+    if(isIncome(p.account))   pyIncome[p.account]   = (pyIncome[p.account]   ?? 0) + p.amount;
+    if(isExpense(p.account))  pyExpenses[p.account] = (pyExpenses[p.account] ?? 0) + p.amount;
+  }
+  const pyTotalInc = -Object.values(pyIncome).reduce((s,v) => s+v, 0);
+  const pyTotalExp =  Object.values(pyExpenses).reduce((s,v) => s+v, 0);
+
+  // Helper: format a percentage change with sign — positive/negative both tracked
+  const yoyPct = (cur, prior) => {
+    if(prior === 0) return { str: '—' };
+    const pct = ((cur - prior) / Math.abs(prior) * 100);
+    return { str: `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` };
+  };
+  const incYoY = yoyPct(totalInc, pyTotalInc);
+  const expYoY = yoyPct(totalExp, pyTotalExp);
+
   document.getElementById('income-period-desc').textContent=periodLabel();
   document.getElementById('income-stats').innerHTML=`
     <div class="stat-card"><div class="sc-label">Total Income</div><div class="sc-value c-green">$${fmt(totalInc)}</div><div class="sc-sub">${Object.keys(income).length} sources</div></div>
     <div class="stat-card"><div class="sc-label">Total Expenses</div><div class="sc-value c-red">$${fmt(totalExp)}</div><div class="sc-sub">${Object.keys(expenses).length} categories</div></div>
     <div class="stat-card"><div class="sc-label">Net Income</div><div class="sc-value ${net>=0?'c-green':'c-red'}">$${fmt(Math.abs(net))}</div><div class="sc-sub ${net>=0?'c-green':'c-red'}">${net>=0?'▲ Profit':'▼ Loss'}</div></div>
     <div class="stat-card"><div class="sc-label">Savings Rate</div><div class="sc-value c-indigo">${savRate}%</div><div class="sc-sub">of income saved</div></div>
+    ${pyTotalInc > 0 ? `
+      <div class="stat-card"><div class="sc-label">Income vs. Prior Year</div>
+        <div class="sc-value ${totalInc >= pyTotalInc ? 'c-green' : 'c-red'}">${incYoY.str}</div>
+        <div class="sc-sub">prior: $${fmt(pyTotalInc)}</div></div>
+      <div class="stat-card"><div class="sc-label">Expenses vs. Prior Year</div>
+        <div class="sc-value ${totalExp <= pyTotalExp ? 'c-green' : 'c-red'}">${expYoY.str}</div>
+        <div class="sc-sub">prior: $${fmt(pyTotalExp)}</div></div>
+    ` : ''}
   `;
 
   // Donut
@@ -1601,6 +1715,11 @@ function renderIncomeStatement(txs) {
   html+=`<tr class="row-total"><td style="padding-left:22px">Net Income / (Loss)</td><td class="td-r td-m ${net>=0?'c-green':'c-red'}">${net>=0?'':'('}$${fmt(Math.abs(net))}${net<0?')':''}</td></tr>`;
   html+=`</tbody></table>`;
   document.getElementById('income-table').innerHTML=html;
+
+  // Feature 5: Savings rate trend chart (full history, not period-filtered)
+  renderSavingsRateTrend();
+  // Feature 4: Top payees breakdown for the current period
+  renderPayees(txs);
 }
 
 // ── Period matrix (hledger-style balance view) ──────────────────
@@ -1688,6 +1807,154 @@ function renderPeriodMatrix() {
   html += renderMatrixSection(expRows,'Expenses',maxExp,'expense');
   html+=`</tbody></table>`;
   document.getElementById('matrix-wrap').innerHTML=html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FEATURE 4 — TOP PAYEES
+// ══════════════════════════════════════════════════════════════════
+// Builds a "Top Payees" breakdown from the filtered period transactions.
+// Groups by transaction description, sums expense and income amounts for each,
+// and renders the top 15 by total spend into #income-payees.
+function renderPayees(txs) {
+  const el = document.getElementById('income-payees');
+  if(!el) return;
+
+  // Aggregate totals per payee (transaction description)
+  const map = {};
+  for(const tx of txs) {
+    const key = tx.description || '(no description)';
+    if(!map[key]) map[key] = { expense: 0, income: 0, count: 0 };
+    map[key].count++;
+    for(const p of tx.postings) {
+      // Sum expense postings directly; income amounts are stored as negatives so flip sign
+      if(isExpense(p.account)) map[key].expense += (p.amount ?? 0);
+      if(isIncome(p.account))  map[key].income  += -(p.amount ?? 0);
+    }
+  }
+
+  // Sort by total expense descending, take top 15
+  const rows = Object.entries(map)
+    .filter(([, v]) => v.expense > 0 || v.income > 0)
+    .sort((a, b) => b[1].expense - a[1].expense)
+    .slice(0, 15);
+
+  if(!rows.length) { el.innerHTML = ''; return; }
+
+  let html = `
+    <div class="tc-hdr" style="padding-bottom:12px">
+      <h3>Top Payees</h3>
+      <p>Largest spend recipients in this period</p>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Payee</th>
+        <th class="td-r">Txns</th>
+        <th class="td-r">Expenses</th>
+        <th class="td-r">Income</th>
+      </tr></thead>
+      <tbody>`;
+
+  for(const [name, v] of rows) {
+    html += `<tr>
+      <td style="font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${name}">${name}</td>
+      <td class="td-r" style="color:var(--text-3);font-size:12px">${v.count}</td>
+      <td class="td-r td-m c-red">${v.expense > 0 ? '$'+fmt(v.expense) : '—'}</td>
+      <td class="td-r td-m c-green">${v.income > 0 ? '$'+fmt(v.income) : '—'}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FEATURE 5 — SAVINGS RATE TREND CHART
+// ══════════════════════════════════════════════════════════════════
+// Computes monthly savings rate across ALL transaction history (not period-filtered)
+// and renders a line chart. Savings rate = (income − expenses) / income × 100.
+// Uses a 3-month rolling average line to smooth out noise.
+function renderSavingsRateTrend() {
+  // Aggregate income and expenses per calendar month from all transactions
+  const monthly = {};
+  for(const tx of allTransactions) {
+    const mo = tx.date.slice(0, 7); // "YYYY-MM"
+    if(!monthly[mo]) monthly[mo] = { income: 0, expense: 0 };
+    for(const p of tx.postings) {
+      // Income amounts are negative in hledger; flip to positive for rate math
+      if(isIncome(p.account))  monthly[mo].income  += -(p.amount ?? 0);
+      if(isExpense(p.account)) monthly[mo].expense += (p.amount ?? 0);
+    }
+  }
+
+  const months = Object.keys(monthly).sort();
+  if(!months.length) { destroyChart('savingsrate-chart'); return; }
+
+  // Compute raw savings rate per month; clamp to -100..100 to keep chart readable
+  const rates = months.map(mo => {
+    const { income, expense } = monthly[mo];
+    if(income <= 0) return 0;
+    return Math.max(-100, Math.min(100, Math.round((income - expense) / income * 100)));
+  });
+
+  // 3-month rolling average for the smooth overlay
+  const rolling = rates.map((_, i) => {
+    const slice = rates.slice(Math.max(0, i - 2), i + 1);
+    return Math.round(slice.reduce((s, v) => s + v, 0) / slice.length);
+  });
+
+  // Format x-axis labels as "Jan '24"
+  const labels = months.map(mo => {
+    const [y, m] = mo.split('-');
+    return new Date(+y, +m - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  });
+
+  destroyChart('savingsrate-chart');
+  charts['savingsrate-chart'] = new Chart(document.getElementById('savingsrate-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Monthly %',
+          data: rates,
+          borderColor: 'rgba(99,102,241,.4)',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          borderWidth: 1.5,
+          pointRadius: months.length > 24 ? 0 : 2,
+          pointHoverRadius: 4,
+        },
+        {
+          label: '3-mo avg',
+          data: rolling,
+          borderColor: '#6366f1',
+          backgroundColor: 'rgba(99,102,241,.08)',
+          fill: true,
+          tension: 0.4,
+          borderWidth: 2.5,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top', labels: { font: { size: 11 }, padding: 10 } },
+        // Show percentage suffix in tooltip
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.raw}%` } },
+      },
+      scales: {
+        x: { grid: { display: false } },
+        y: {
+          grid: { color: 'rgba(0,0,0,.04)' },
+          ticks: { callback: v => `${v}%` },
+          // Dashed zero line for visual reference
+          border: { dash: [4, 4] },
+        },
+      },
+    },
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1889,6 +2156,79 @@ function renderNetWorth() {
       scales:{x:{grid:{display:false}},y:{grid:{color:'#f1f5f9'},ticks:{callback:tkAxis}}}
     }
   });
+
+  // ── Feature 6: Emergency Fund Gauge ──────────────────────────────────────
+  // `balances` is the running account balance map already computed by the pts loop above.
+  // Liquid assets = all asset accounts EXCEPT investments, retirement, or illiquid holdings.
+  const liquidAssets = Object.entries(balances)
+    .filter(([a]) => isAsset(a) && !/invest|stock|brokerage|retirement|401|ira|crypto|bond|fund/i.test(a))
+    .reduce((s, [, v]) => s + v, 0);
+
+  // Compute last 3 months of expense totals to derive avg monthly expense baseline
+  const now = new Date();
+  const last3 = [2, 1, 0].map(offset => {
+    const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+    return d.toISOString().slice(0, 7); // "YYYY-MM"
+  });
+  let totalRecentExp = 0, recentMonths = 0;
+  for(const mo of last3) {
+    let exp = 0;
+    for(const tx of allTransactions) {
+      if(tx.date.slice(0, 7) !== mo) continue;
+      for(const p of tx.postings) {
+        if(isExpense(p.account)) exp += (p.amount ?? 0);
+      }
+    }
+    if(exp > 0) { totalRecentExp += exp; recentMonths++; }
+  }
+  const avgMonthlyExp = recentMonths > 0 ? totalRecentExp / recentMonths : 0;
+  const efMonths = avgMonthlyExp > 0 ? liquidAssets / avgMonthlyExp : 0;
+
+  const efEl = document.getElementById('emergency-fund');
+  if(!efEl) return;
+
+  // Color coding: < 3 months = red, 3–6 = amber, ≥ 6 = green
+  const tierColor = efMonths < 3 ? 'var(--c-neg)' : efMonths < 6 ? '#f59e0b' : 'var(--c-pos)';
+  const tierLabel = efMonths < 3 ? 'Below recommended' : efMonths < 6 ? 'Approaching target' : 'Well funded';
+  // Gauge fills at 6 months = 100%; cap at 100% for display
+  const fillPct = Math.min(100, (efMonths / 6) * 100);
+
+  efEl.innerHTML = `
+    <div class="tc-hdr" style="padding-bottom:12px">
+      <h3>Emergency Fund</h3>
+      <p>Liquid assets ÷ avg monthly expenses (last 3 months)</p>
+    </div>
+    <!-- Gauge bar spans the full card width — no wrapping flex container -->
+    <div style="width:100%">
+      <!-- Filled progress bar: 6 months = 100%, color-coded by funding tier -->
+      <div style="height:10px;background:var(--surface-3);border-radius:99px;overflow:hidden;margin-bottom:8px">
+        <div style="height:100%;width:${fillPct.toFixed(1)}%;background:${tierColor};border-radius:99px;transition:width .4s ease"></div>
+      </div>
+      <!-- Scale labels below the bar -->
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-4);margin-bottom:20px">
+        <span>0 mo</span><span>3 mo</span><span>6 mo+</span>
+      </div>
+    </div>
+    <!-- Stat cards sit below the gauge in a simple row -->
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+      <div class="stat-card" style="min-width:120px">
+        <!-- "Months Covered" replaces startup-y "Runway" — friendlier for home budgeting -->
+        <div class="sc-label">Months Covered</div>
+        <div class="sc-value" style="color:${tierColor}">${efMonths >= 100 ? '99+' : efMonths.toFixed(1)} mo</div>
+        <div class="sc-sub" style="color:${tierColor}">${tierLabel}</div>
+      </div>
+      <div class="stat-card" style="min-width:120px">
+        <div class="sc-label">Liquid Assets</div>
+        <div class="sc-value c-blue">$${fmt(liquidAssets)}</div>
+        <div class="sc-sub">non-investment</div>
+      </div>
+      <div class="stat-card" style="min-width:120px">
+        <div class="sc-label">Avg Monthly Exp</div>
+        <div class="sc-value c-red">$${avgMonthlyExp > 0 ? fmt(avgMonthlyExp) : '—'}</div>
+        <div class="sc-sub">last ${recentMonths} month${recentMonths !== 1 ? 's' : ''}</div>
+      </div>
+    </div>
+  `;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1934,9 +2274,11 @@ function populateTxAccounts() {
 }
 
 function applyTxFilter() {
-  txAcctFilter    = document.getElementById('tx-acct-filter').value;
-  txStatusFilter  = document.getElementById('tx-status-filter').value;
-  const hasFilter = txAcctFilter || txStatusFilter;
+  txAcctFilter   = document.getElementById('tx-acct-filter').value;
+  txStatusFilter = document.getElementById('tx-status-filter').value;
+  // Read the free-text search box value (Feature 2)
+  txSearchFilter = (document.getElementById('tx-search')?.value || '').trim().toLowerCase();
+  const hasFilter = txAcctFilter || txStatusFilter || txSearchFilter;
   document.getElementById('tx-clear-btn').style.display = hasFilter ? '' : 'none';
   renderTransactions(filteredTxs());
 }
@@ -1944,20 +2286,34 @@ function applyTxFilter() {
 function clearTxFilter() {
   txAcctFilter   = '';
   txStatusFilter = '';
-  document.getElementById('tx-acct-filter').value    = '';
-  document.getElementById('tx-status-filter').value  = '';
+  txSearchFilter = '';
+  document.getElementById('tx-acct-filter').value   = '';
+  document.getElementById('tx-status-filter').value = '';
+  // Clear the search input box (Feature 2)
+  const searchEl = document.getElementById('tx-search');
+  if(searchEl) searchEl.value = '';
   document.getElementById('tx-clear-btn').style.display = 'none';
   renderTransactions(filteredTxs());
 }
 
-// Navigate to Transactions panel filtered to a specific account
+// Navigate to Transactions panel filtered to a specific account (or account prefix).
+// `acct` may be an exact posting account ("Assets:Checking:USBank") or a parent
+// prefix ("Assets:Checking") — the transaction filter uses startsWith matching to
+// cover both cases. The dropdown is set only when `acct` is an exact match that
+// exists as an option; otherwise we clear it and rely on the filter label instead.
 function filterToAccount(acct) {
   txAcctFilter   = acct;
   txStatusFilter = '';
   const sel = document.getElementById('tx-acct-filter');
-  if(sel) sel.value = acct;
+  if (sel) {
+    // Only set the dropdown value when acct is an exact option in the list;
+    // parent-prefix filters (e.g. "Assets:Checking") won't match any option
+    // so we fall back to blank, which is fine — the count label shows the filter.
+    const exists = [...sel.options].some(o => o.value === acct);
+    sel.value = exists ? acct : '';
+  }
   const statusSel = document.getElementById('tx-status-filter');
-  if(statusSel) statusSel.value = '';
+  if (statusSel) statusSel.value = '';
   document.getElementById('tx-clear-btn').style.display = acct ? '' : 'none';
   renderTransactions(filteredTxs());
   showPanel('transactions');
@@ -1966,191 +2322,336 @@ function filterToAccount(acct) {
 // ══════════════════════════════════════════════════════════════════
 // MONEY FLOW — Sankey diagram
 // ══════════════════════════════════════════════════════════════════
-// Custom SVG Sankey — no third-party Sankey library, drawn with cubic-bezier paths.
+// Custom SVG Sankey — no third-party library, drawn with cubic-bezier paths.
 //
-// Layout: 3 columns
-//   Left column  — income source nodes (one per category key, e.g. "Salary")
-//   Center column — single "Budget" node spanning full income height
-//   Right column  — expense destination nodes (full account path, top 15 + Other)
-//                   plus a synthetic "Savings" node if income > expenses
+// Layout: 4 columns
+//   Col 1 (left)       — income source nodes  (one per catKey, e.g. "Salary")
+//   Col 2 (center-L)   — single "Budget" node spanning full available height
+//   Col 3 (center-R)   — top-level expense CATEGORY nodes + Savings/Other
+//   Col 4 (right)      — individual leaf account nodes within each category
 //
-// Ribbon sizing: each ribbon height is proportional to its amount using a shared
-// scale factor computed to fit both the income column and expense column within
-// availH without overflow. ribbonD() draws a cubic-bezier quadrilateral (4 control
-// points) connecting two vertical rectangles.
+// SCALING: Each column uses its own independent scale factor so it fills the
+// available height based on its own totals. This means a $24 expense category
+// gets proportional space within col3 (relative to other categories), and its
+// sub-accounts in col4 fill the FULL height independently — making small
+// spending categories clearly visible even when savings dominate.
 //
-// Interactivity: mouseenter on ribbons dims all others to 0.1 opacity; node hover
-// shows a tooltip. Expense node click (via filterToAccount) is not wired here —
-// that would require navigating to the Transactions panel.
+// Ribbons fan or compress between columns (bezier S-curves handle different
+// source/dest heights). This "dynamic" spreading is the key feature.
+//
+// All ribbon proportions use (val/colTotal × colHeight) allocation so each
+// node is always exactly covered by its ribbons with no gaps.
+//
+// Interactivity: ribbon hover dims siblings; node hover shows tooltip.
 function renderSankey() {
-  const txs=filteredTxs();
+  const txs = filteredTxs();
 
-  // Income grouped by category (second segment)
-  // Expenses grouped by FULL account path → individual bills
-  const incomeMap={}, expenseMap={};
-  for(const tx of txs) for(const p of tx.postings){
-    const a=p.amount??0;
-    if(isIncome(p.account)){
-      const k=catKey(p.account);
-      incomeMap[k]=(incomeMap[k]||0)+(-a);
-    } else if(isExpense(p.account)){
-      expenseMap[p.account]=(expenseMap[p.account]||0)+a;
+  // ── Aggregate income by catKey, expenses by full account path ────
+  const incomeMap = {}, expenseRaw = {};
+  for (const tx of txs) for (const p of tx.postings) {
+    const a = p.amount ?? 0;
+    if (isIncome(p.account)) {
+      const k = catKey(p.account);
+      incomeMap[k] = (incomeMap[k] || 0) + (-a);
+    } else if (isExpense(p.account)) {
+      expenseRaw[p.account] = (expenseRaw[p.account] || 0) + a;
     }
   }
 
-  const totalInc=Object.values(incomeMap).reduce((s,v)=>s+v,0);
-  const totalExp=Object.values(expenseMap).reduce((s,v)=>s+v,0);
-  const savings =Math.max(0,totalInc-totalExp);
+  const totalInc = Object.values(incomeMap).reduce((s, v) => s + v, 0);
+  const totalExp = Object.values(expenseRaw).reduce((s, v) => s + v, 0);
+  const savings  = Math.max(0, totalInc - totalExp);
 
-  document.getElementById('sankey-period-desc').textContent=periodLabel();
-  document.getElementById('sankey-desc').textContent=periodLabel();
-  document.getElementById('sankey-stats').innerHTML=`
-    <div class="stat-card"><div class="sc-label">Total Income</div><div class="sc-value c-green">$${fmt(totalInc)}</div><div class="sc-sub">${Object.keys(incomeMap).length} source${Object.keys(incomeMap).length!==1?'s':''}</div></div>
-    <div class="stat-card"><div class="sc-label">Total Expenses</div><div class="sc-value c-red">$${fmt(totalExp)}</div><div class="sc-sub">${Object.keys(expenseMap).length} line item${Object.keys(expenseMap).length!==1?'s':''}</div></div>
-    <div class="stat-card"><div class="sc-label">Net Savings</div><div class="sc-value ${savings>=0?'c-green':'c-red'}">$${fmt(savings)}</div><div class="sc-sub">${totalInc>0?Math.round(savings/totalInc*100):0}% savings rate</div></div>
+  // Update period label and summary stat cards
+  document.getElementById('sankey-period-desc').textContent = periodLabel();
+  document.getElementById('sankey-desc').textContent = periodLabel();
+  document.getElementById('sankey-stats').innerHTML = `
+    <div class="stat-card"><div class="sc-label">Total Income</div><div class="sc-value c-green">$${fmt(totalInc)}</div><div class="sc-sub">${Object.keys(incomeMap).length} source${Object.keys(incomeMap).length !== 1 ? 's' : ''}</div></div>
+    <div class="stat-card"><div class="sc-label">Total Expenses</div><div class="sc-value c-red">$${fmt(totalExp)}</div><div class="sc-sub">${Object.keys(expenseRaw).length} line item${Object.keys(expenseRaw).length !== 1 ? 's' : ''}</div></div>
+    <div class="stat-card"><div class="sc-label">Net Savings</div><div class="sc-value ${savings >= 0 ? 'c-green' : 'c-red'}">$${fmt(savings)}</div><div class="sc-sub">${totalInc > 0 ? Math.round(savings / totalInc * 100) : 0}% savings rate</div></div>
   `;
 
-  const svg_el=document.getElementById('sankey-svg');
-  if(totalInc===0){
-    svg_el.setAttribute('viewBox','0 0 820 200');
-    svg_el.innerHTML='<text x="410" y="100" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="system-ui">No income data in this period.</text>';
+  const svg_el = document.getElementById('sankey-svg');
+  if (totalInc === 0) {
+    svg_el.setAttribute('viewBox', '0 0 1020 200');
+    svg_el.innerHTML = '<text x="510" y="100" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="system-ui">No income data in this period.</text>';
     return;
   }
 
-  // Cap right-side to keep diagram readable
-  let expEntries=Object.entries(expenseMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
-  if(expEntries.length>16){
-    const top=expEntries.slice(0,15);
-    const otherTotal=expEntries.slice(15).reduce((s,[,v])=>s+v,0);
-    expEntries=[...top,['__other__',otherTotal]];
+  // ── Cap individual accounts to top 15, bundle the rest into "Other" ──
+  let rawExpEntries = Object.entries(expenseRaw).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  let otherTotal = 0, hasOther = false;
+  if (rawExpEntries.length > 16) {
+    otherTotal = rawExpEntries.slice(15).reduce((s, [, v]) => s + v, 0);
+    rawExpEntries = rawExpEntries.slice(0, 15);
+    hasOther = true;
   }
-  if(savings>0.5) expEntries.push(['__savings__',savings]);
 
-  const incEntries=Object.entries(incomeMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  // ── Build category → accounts map (col 3 → col 4 grouping) ────────
+  // catMap: { categoryName → { total, accounts: [{acc, val}] } }
+  const catMap = {};
+  for (const [acc, val] of rawExpEntries) {
+    const cat = catKey(acc); // second segment of "Expenses:Housing:Rent" → "Housing"
+    if (!catMap[cat]) catMap[cat] = { total: 0, accounts: [] };
+    catMap[cat].total += val;
+    catMap[cat].accounts.push({ acc, val });
+  }
+  // Sort categories by total descending; accounts within each category also desc
+  const catEntries = Object.entries(catMap).filter(([, c]) => c.total > 0).sort((a, b) => b[1].total - a[1].total);
+  for (const [, c] of catEntries) c.accounts.sort((a, b) => b.val - a.val);
 
-  // Dynamic SVG height based on node count
-  const W=820, nodeW=16, gapN=9, mt=40, mb=40, minNH=24;
-  const maxNodes=Math.max(incEntries.length,expEntries.length);
-  const H=Math.max(440, mt+mb+maxNodes*(minNH+gapN)-gapN);
-  const availH=H-mt-mb;
+  // ── SVG layout constants ───────────────────────────────────────────
+  const W      = 1020; // wider canvas to fit 4 columns
+  const nodeW  = 14;   // width of every column node bar
+  const mt = 40, mb = 40; // top/bottom margins
+  const incGap      = 8;  // gap between income nodes (col 1)
+  const interCatGap = 10; // gap between categories in col 4 (between groups)
+  const intraCatGap = 3;  // gap between accounts within the same category
 
-  // Pick scale so both columns fit without overflow
-  const incTotal=incEntries.reduce((s,[,v])=>s+v,0);
-  const expTotal=expEntries.reduce((s,[,v])=>s+v,0);
-  const gapsL=gapN*Math.max(incEntries.length-1,0);
-  const gapsR=gapN*Math.max(expEntries.length-1,0);
-  const scaleL=(availH-gapsL)/Math.max(incTotal,0.01);
-  const scaleR=(availH-gapsR)/Math.max(expTotal,0.01);
-  const scale=Math.min(scaleL,scaleR);
-  const ch=v=>Math.max(v*scale,3);
+  // Column x positions (left edge of each node bar)
+  const lx  = 145;  // col 1: income nodes right edge = lx, left edge = lx-nodeW
+  const c1x = 325;  // col 2: budget node
+  const c2x = 555;  // col 3: category nodes
+  const rx  = 790;  // col 4: individual account nodes
 
-  const lx=132, rx=W-132, midx=W/2;
-  const centerH=ch(incTotal);
-  const centerY=mt+(availH-centerH)/2;
+  // ── Income entries sorted by value desc ───────────────────────────
+  const incEntries = Object.entries(incomeMap).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
 
-  const incTotalH=incEntries.reduce((s,[,v])=>s+ch(v),0)+gapsL;
-  let iy=mt+(availH-incTotalH)/2;
-  const incNodes=incEntries.map(([name,val])=>{
-    const h=ch(val); const nd={name,val,x:lx-nodeW,y:iy,h}; iy+=h+gapN; return nd;
+  // ── Per-column independent scale factors ──────────────────────────
+  // Each column fills the available height (AH) independently using its own
+  // scale. This means col 4 (individual accounts) spreads across the full
+  // height based on account proportions alone — not compressed by savings
+  // or large income values dominating a shared scale.
+  //
+  // Ribbons fan or compress between columns (the bezier S-curve handles
+  // different source/dest heights naturally). The Budget node spans full AH
+  // so it acts as the "spine" connecting both sides.
+
+  // Node counts — used for dynamic SVG height
+  const numCatNodes  = catEntries.length + (hasOther ? 1 : 0) + (savings > 0.5 ? 1 : 0);
+  // Col 4 contains only real expense accounts (savings/other stay in col 3)
+  const numAcctNodes = rawExpEntries.length;
+  const maxNodes = Math.max(incEntries.length, numCatNodes, numAcctNodes);
+  const H  = Math.max(500, mt + mb + maxNodes * 32);
+  const AH = H - mt - mb;
+
+  // Col 1: income column fills AH
+  const totalIncVal  = incEntries.reduce((s, [, v]) => s + v, 0);
+  const incGapsTotal = incGap * Math.max(incEntries.length - 1, 0);
+  const scaleInc  = totalIncVal  > 0 ? (AH - incGapsTotal) / totalIncVal  : 1;
+  const chInc = v => Math.max(v * scaleInc, 3);
+
+  // Col 3: category column fills AH (all categories + savings + other)
+  const totalCatVal  = catEntries.reduce((s, [, c]) => s + c.total, 0)
+                     + (hasOther    ? otherTotal : 0)
+                     + (savings > 0.5 ? savings   : 0);
+  const catGapsTotal = interCatGap * Math.max(numCatNodes - 1, 0);
+  const scaleCat  = totalCatVal  > 0 ? (AH - catGapsTotal)  / totalCatVal  : 1;
+  const chCat = v => Math.max(v * scaleCat, 3);
+
+  // Col 4: account column fills AH independently of col 3 — the key to "dynamic
+  // spreading". A $24 subscription with two equal accounts (Audible, Amazon) will
+  // each occupy ~half the diagram height in col 4, regardless of savings size.
+  let fixedGapsAcct = 0;
+  for (let ci = 0; ci < catEntries.length; ci++) {
+    const [, c] = catEntries[ci];
+    fixedGapsAcct += (c.accounts.length - 1) * intraCatGap;
+    if (ci < catEntries.length - 1) fixedGapsAcct += interCatGap;
+  }
+  const totalAcctVal = rawExpEntries.reduce((s, [, v]) => s + v, 0);
+  const scaleAcct = totalAcctVal > 0 ? (AH - fixedGapsAcct) / totalAcctVal : 1;
+  const chAcct = v => Math.max(v * scaleAcct, 3);
+
+  // ── Layout: income nodes (col 1) — fills AH ──────────────────────
+  const incTotalH = incEntries.reduce((s, [, v]) => s + chInc(v), 0) + incGapsTotal;
+  let iy = mt + (AH - incTotalH) / 2; // center vertically (usually ≈ mt since fills AH)
+  const incNodes = incEntries.map(([name, val]) => {
+    const h = chInc(val);
+    const nd = { name, val, x: lx - nodeW, y: iy, h };
+    iy += h + incGap;
+    return nd;
   });
 
-  const expTotalH=expEntries.reduce((s,[,v])=>s+ch(v),0)+gapsR;
-  let ey=mt+(availH-expTotalH)/2;
-  const expNodes=expEntries.map(([name,val])=>{
-    const h=ch(val); const nd={name,val,x:rx,y:ey,h}; ey+=h+gapN; return nd;
+  // ── Layout: category nodes (col 3) — fills AH independently ───────
+  // Positioned from top margin, using chCat scale (independent of col 4).
+  const catNodes3 = [];
+  let cy3 = mt;
+  for (let ci = 0; ci < catEntries.length; ci++) {
+    const [catName, c] = catEntries[ci];
+    const h = chCat(c.total);
+    catNodes3.push({ name: catName, total: c.total, x: c2x, y: cy3, h });
+    cy3 += h + (ci < catEntries.length - 1 ? interCatGap : 0);
+  }
+  if (hasOther) {
+    if (catEntries.length > 0) cy3 += interCatGap;
+    const h = chCat(otherTotal);
+    catNodes3.push({ name: 'Other', total: otherTotal, x: c2x, y: cy3, h, isTerminal: true, color: '#94a3b8' });
+    cy3 += h;
+  }
+  if (savings > 0.5) {
+    if (catNodes3.length > 0) cy3 += interCatGap;
+    const h = chCat(savings);
+    catNodes3.push({ name: 'Savings', total: savings, x: c2x, y: cy3, h, isTerminal: true, color: '#16a34a' });
+  }
+
+  // ── Layout: account nodes (col 4) — fills AH independently ────────
+  // Only real expense accounts; savings/other have no col-4 representation.
+  // Groups are separated by interCatGap so related accounts stay clustered.
+  let accTotalH = 0;
+  for (let ci = 0; ci < catEntries.length; ci++) {
+    const [, c] = catEntries[ci];
+    for (const { val } of c.accounts) accTotalH += chAcct(val);
+    accTotalH += (c.accounts.length - 1) * intraCatGap;
+    if (ci < catEntries.length - 1) accTotalH += interCatGap;
+  }
+
+  let ey = mt + (AH - accTotalH) / 2;
+  const acctNodes = [];
+  for (let ci = 0; ci < catEntries.length; ci++) {
+    const [catName, c] = catEntries[ci];
+    for (let ai = 0; ai < c.accounts.length; ai++) {
+      const { acc, val } = c.accounts[ai];
+      const h = chAcct(val);
+      acctNodes.push({ name: acc, val, x: rx, y: ey, h, catName });
+      ey += h + (ai < c.accounts.length - 1 ? intraCatGap : 0);
+    }
+    if (ci < catEntries.length - 1) ey += interCatGap;
+  }
+
+  // ── Budget node (col 2) — spans full AH as the flow "spine" ───────
+  // Budget fills the full available height so ribbons on both sides can
+  // fan or compress freely without the budget node being a bottleneck.
+  const centerH = AH;
+  const centerY = mt;
+
+  let svg = '';
+  const ribbonData = {}, nodeData = {};
+
+  // ── Ribbons: income (col 1) → budget (col 2) ─────────────────────
+  // Each ribbon takes (val/totalIncVal)*AH pixels on the budget left face.
+  let budLY = mt;
+  incNodes.forEach((n, i) => {
+    const rh  = (n.val / totalIncVal) * AH;
+    const col = getCategoryColor(n.name);
+    const id  = `sk-ri-${i}`;
+    ribbonData[id] = { src: n.name, dest: 'Budget', amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+    svg += `<path id="${id}" class="sk-ribbon" d="${ribbonD(n.x + nodeW, n.y, n.h, c1x, budLY, rh)}" fill="${col}" opacity="0.42"/>`;
+    budLY += rh;
   });
 
-  const getExpLabel=name=>name==='__savings__'?'Savings':name==='__other__'?'Other':shortAcct(name);
-  const getExpColor=name=>name==='__savings__'?'#16a34a':name==='__other__'?'#94a3b8':getCategoryColor(catKey(name));
-  const isSpecial  =name=>name==='__savings__'||name==='__other__';
-
-  const ribbonData={}, nodeData={};
-  let svg='';
-
-  // ── Ribbons: income → center ──────────────────────────────────
-  let cLY=centerY;
-  incNodes.forEach((n,i)=>{
-    const rh=ch(n.val), col=getCategoryColor(n.name), id=`sk-ri-${i}`;
-    ribbonData[id]={src:n.name, dest:'Budget', amount:n.val, pct:Math.round(n.val/totalInc*100)};
-    svg+=`<path id="${id}" class="sk-ribbon" d="${ribbonD(n.x+nodeW,n.y,n.h,midx-nodeW/2,cLY,rh)}" fill="${col}" opacity="0.42"/>`;
-    cLY+=rh;
+  // ── Ribbons: budget (col 2) → categories (col 3) ─────────────────
+  // Each ribbon takes (val/totalCatVal)*AH pixels on the budget right face.
+  // totalCatVal ≈ totalIncVal (expenses + savings = income), so both faces
+  // of the budget node are fully covered by their ribbons.
+  let budRY = mt;
+  catNodes3.forEach((cat, i) => {
+    const rh  = (cat.total / totalCatVal) * AH;
+    const col = cat.color ?? getCategoryColor(cat.name);
+    const id  = `sk-rc-${i}`;
+    ribbonData[id] = { src: 'Budget', dest: cat.name, amount: cat.total, pct: Math.round(cat.total / totalInc * 100) };
+    svg += `<path id="${id}" class="sk-ribbon" d="${ribbonD(c1x + nodeW, budRY, rh, c2x, cat.y, cat.h)}" fill="${col}" opacity="0.42"/>`;
+    budRY += rh;
   });
 
-  // ── Ribbons: center → expenses ────────────────────────────────
-  let cRY=centerY;
-  expNodes.forEach((n,i)=>{
-    const rh=ch(n.val), col=getExpColor(n.name), id=`sk-re-${i}`;
-    const label=getExpLabel(n.name);
-    ribbonData[id]={src:'Budget', dest:label, fullAcct:isSpecial(n.name)?null:n.name, amount:n.val, pct:Math.round(n.val/totalInc*100)};
-    svg+=`<path id="${id}" class="sk-ribbon" d="${ribbonD(midx+nodeW/2,cRY,rh,n.x,n.y,n.h)}" fill="${col}" opacity="0.42"/>`;
-    cRY+=rh;
+  // ── Ribbons: categories (col 3) → individual accounts (col 4) ─────
+  // Uses proportional allocation within each category node height so the
+  // category node is always fully covered by outgoing ribbons.
+  const catConsumed = {}; // catName → px consumed from top of category node
+  acctNodes.forEach((n, i) => {
+    const catNode = catNodes3.find(c => c.name === n.catName);
+    if (!catNode) return;
+    const consumed = catConsumed[n.catName] ?? 0;
+    const rh  = (n.val / catNode.total) * catNode.h; // proportional slice
+    const col = getCategoryColor(catKey(n.name));
+    const id  = `sk-ra-${i}`;
+    ribbonData[id] = { src: n.catName, dest: shortAcct(n.name), fullAcct: n.name, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+    svg += `<path id="${id}" class="sk-ribbon" d="${ribbonD(c2x + nodeW, catNode.y + consumed, rh, rx, n.y, n.h)}" fill="${col}" opacity="0.42"/>`;
+    catConsumed[n.catName] = consumed + rh;
   });
 
-  // ── Center node ───────────────────────────────────────────────
-  nodeData['sk-nc']={label:'Budget', amount:totalInc, pct:100, sub:`$${fmtK(totalExp)} spent · $${fmtK(savings)} saved`};
-  svg+=`<rect id="sk-nc" class="sk-node" x="${midx-nodeW/2}" y="${centerY}" width="${nodeW}" height="${centerH}" rx="3" fill="#6366f1"/>`;
-  svg+=`<text x="${midx}" y="${centerY-9}" text-anchor="middle" font-size="11" font-weight="600" fill="#475569" font-family="system-ui">Budget</text>`;
-  svg+=`<text x="${midx}" y="${centerY+centerH+15}" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="system-ui">$${fmtK(totalInc)}</text>`;
+  // ── Budget node (col 2) ───────────────────────────────────────────
+  const budMidX = c1x + nodeW / 2;
+  nodeData['sk-nc'] = { label: 'Budget', amount: totalInc, pct: 100, sub: `$${fmtK(totalExp)} spent · $${fmtK(savings)} saved` };
+  svg += `<rect id="sk-nc" class="sk-node" x="${c1x}" y="${centerY}" width="${nodeW}" height="${centerH}" rx="3" fill="#6366f1"/>`;
+  svg += `<text x="${budMidX}" y="${centerY - 9}" text-anchor="middle" font-size="11" font-weight="600" fill="#475569" font-family="system-ui">Budget</text>`;
+  svg += `<text x="${budMidX}" y="${centerY + centerH + 15}" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="system-ui">$${fmtK(totalInc)}</text>`;
 
-  // ── Income nodes + labels ─────────────────────────────────────
-  incNodes.forEach((n,i)=>{
-    const col=getCategoryColor(n.name), id=`sk-ni-${i}`;
-    nodeData[id]={label:n.name, amount:n.val, pct:Math.round(n.val/totalInc*100)};
-    svg+=`<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
-    const ly=n.y+n.h/2+(n.h>24?-4:4);
-    svg+=`<text x="${n.x-8}" y="${ly}" text-anchor="end" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${n.name}</text>`;
-    if(n.h>16) svg+=`<text x="${n.x-8}" y="${ly+13}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  // ── Income nodes + labels (col 1) ────────────────────────────────
+  incNodes.forEach((n, i) => {
+    const col = getCategoryColor(n.name), id = `sk-ni-${i}`;
+    nodeData[id] = { label: n.name, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+    svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
+    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
+    svg += `<text x="${n.x - 8}" y="${ly}" text-anchor="end" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${n.name}</text>`;
+    if (n.h > 16) svg += `<text x="${n.x - 8}" y="${ly + 13}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
   });
 
-  // ── Expense nodes + labels ────────────────────────────────────
-  expNodes.forEach((n,i)=>{
-    const col=getExpColor(n.name), label=getExpLabel(n.name), id=`sk-ne-${i}`;
-    nodeData[id]={label:isSpecial(n.name)?label:n.name, displayLabel:label, amount:n.val, pct:Math.round(n.val/totalInc*100)};
-    svg+=`<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
-    const ly=n.y+n.h/2+(n.h>24?-4:4);
-    svg+=`<text x="${n.x+nodeW+8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
-    if(n.h>16) svg+=`<text x="${n.x+nodeW+8}" y="${ly+13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  // ── Category nodes + labels (col 3) ──────────────────────────────
+  // Labels appear to the RIGHT of col 3 nodes, in the space between col 3 and col 4.
+  // Ribbons passing through that space are transparent (0.42), so text stays readable.
+  catNodes3.forEach((cat, i) => {
+    const col = cat.color ?? getCategoryColor(cat.name);
+    const id  = `sk-ncat-${i}`;
+    nodeData[id] = { label: cat.name, amount: cat.total, pct: Math.round(cat.total / totalInc * 100) };
+    svg += `<rect id="${id}" class="sk-node" x="${cat.x}" y="${cat.y}" width="${nodeW}" height="${cat.h}" rx="3" fill="${col}"/>`;
+    const ly = cat.y + cat.h / 2 + (cat.h > 24 ? -4 : 4);
+    svg += `<text x="${cat.x + nodeW + 6}" y="${ly}" text-anchor="start" font-size="11" font-weight="600" fill="#475569" font-family="system-ui" pointer-events="none">${cat.name}</text>`;
+    if (cat.h > 16) svg += `<text x="${cat.x + nodeW + 6}" y="${ly + 12}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(cat.total)}</text>`;
   });
 
-  svg_el.setAttribute('viewBox',`0 0 ${W} ${H}`);
-  svg_el.innerHTML=svg;
+  // ── Individual account nodes + labels (col 4) ─────────────────────
+  // Terminal nodes: savings and other live only in col 3, so acctNodes never
+  // contains them — no col-4 rendering needed for those.
+  acctNodes.forEach((n, i) => {
+    const col   = getCategoryColor(catKey(n.name));
+    const id    = `sk-na-${i}`;
+    const label = shortAcct(n.name); // last path segment, e.g. "Rent"
+    nodeData[id] = { label: n.name, displayLabel: label, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+    svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
+    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
+    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
+    if (n.h > 16) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  });
 
-  // ── Hover interactivity ───────────────────────────────────────
-  const tt=document.getElementById('sankey-tooltip');
-  const showTT=(e,html)=>{
-    tt.innerHTML=html; tt.style.display='block';
-    tt.style.left=(e.clientX+18)+'px'; tt.style.top=(e.clientY-60)+'px';
+  svg_el.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg_el.innerHTML = svg;
+
+  // ── Hover interactivity ───────────────────────────────────────────
+  const tt = document.getElementById('sankey-tooltip');
+  const showTT = (e, html) => {
+    tt.innerHTML = html; tt.style.display = 'block';
+    tt.style.left = (e.clientX + 18) + 'px'; tt.style.top = (e.clientY - 60) + 'px';
   };
-  const moveTT=e=>{ tt.style.left=(e.clientX+18)+'px'; tt.style.top=(e.clientY-60)+'px'; };
-  const hideTT=()=>tt.style.display='none';
-  const dimAll =()=>svg_el.querySelectorAll('.sk-ribbon').forEach(r=>r.style.opacity='0.1');
-  const resetAll=()=>svg_el.querySelectorAll('.sk-ribbon').forEach(r=>r.style.opacity='0.42');
+  const moveTT  = e  => { tt.style.left = (e.clientX + 18) + 'px'; tt.style.top = (e.clientY - 60) + 'px'; };
+  const hideTT  = () => tt.style.display = 'none';
+  const dimAll  = () => svg_el.querySelectorAll('.sk-ribbon').forEach(r => r.style.opacity = '0.1');
+  const resetAll= () => svg_el.querySelectorAll('.sk-ribbon').forEach(r => r.style.opacity = '0.42');
 
-  svg_el.querySelectorAll('.sk-ribbon').forEach(el=>{
-    const d=ribbonData[el.id]; if(!d) return;
-    el.addEventListener('mouseenter',()=>{ dimAll(); el.style.opacity='0.82'; });
-    el.addEventListener('mousemove',e=>showTT(e,`
+  svg_el.querySelectorAll('.sk-ribbon').forEach(el => {
+    const d = ribbonData[el.id]; if (!d) return;
+    el.addEventListener('mouseenter', () => { dimAll(); el.style.opacity = '0.82'; });
+    el.addEventListener('mousemove', e => showTT(e, `
       <div class="sk-tt-name">${d.src} → ${d.dest}</div>
-      ${d.fullAcct?`<div class="sk-tt-full">${d.fullAcct}</div>`:''}
+      ${d.fullAcct ? `<div class="sk-tt-full">${d.fullAcct}</div>` : ''}
       <div class="sk-tt-val">$${fmt(d.amount)}</div>
       <div class="sk-tt-pct">${d.pct}% of income</div>
     `));
-    el.addEventListener('mouseleave',()=>{ resetAll(); hideTT(); });
+    el.addEventListener('mouseleave', () => { resetAll(); hideTT(); });
   });
 
-  svg_el.querySelectorAll('.sk-node').forEach(el=>{
-    const d=nodeData[el.id]; if(!d) return;
-    const dl=d.displayLabel||d.label;
-    const showFull=d.label!==dl;
-    el.addEventListener('mouseenter',e=>showTT(e,`
+  svg_el.querySelectorAll('.sk-node').forEach(el => {
+    const d = nodeData[el.id]; if (!d) return;
+    const dl = d.displayLabel || d.label;
+    const showFull = d.label !== dl;
+    el.addEventListener('mouseenter', e => showTT(e, `
       <div class="sk-tt-name">${dl}</div>
-      ${showFull?`<div class="sk-tt-full">${d.label}</div>`:''}
-      ${d.sub?`<div class="sk-tt-sub">${d.sub}</div>`:''}
+      ${showFull ? `<div class="sk-tt-full">${d.label}</div>` : ''}
+      ${d.sub ? `<div class="sk-tt-sub">${d.sub}</div>` : ''}
       <div class="sk-tt-val">$${fmt(d.amount)}</div>
       <div class="sk-tt-pct">${d.pct}% of income</div>
     `));
-    el.addEventListener('mousemove',moveTT);
-    el.addEventListener('mouseleave',hideTT);
+    el.addEventListener('mousemove', moveTT);
+    el.addEventListener('mouseleave', hideTT);
   });
 }
 
@@ -2169,37 +2670,79 @@ function ribbonD(x1,y1t,h1,x2,y2t,h2){
 // (NOT full history) and groups results by account type using buildAcctRows().
 // Each row is clickable and calls filterToAccount() to jump to the Transactions
 // panel pre-filtered to that account. Income amounts are sign-flipped for display.
+// Renders the Account Balances panel.
+//
+// Account discovery uses allTransactions (full history) so every account
+// ever seen is listed even if it had zero activity in the current period.
+// The balance displayed is computed from the period-filtered `txs` — so for
+// income/expense rows it shows period activity, and for assets/liabilities it
+// shows the net change in the period (with $0 if the account was inactive).
+//
+// Group headers (e.g. "Checking" covering "Checking:A" and "Checking:B") are
+// clickable and filter Transactions to all accounts with that prefix, not just
+// one leaf — so clicking "Checking" shows ALL checking sub-account activity.
 function renderAccounts(txs) {
-  const balances={};
-  for(const tx of txs) for(const p of tx.postings) balances[p.account]=(balances[p.account]??0)+(p.amount??0);
-  const groups={income:[],expense:[],asset:[],liability:[],equity:[],other:[]};
-  for(const[a,b] of Object.entries(balances)) groups[acctType(a)].push({acct:a,bal:b});
-  const order=['asset','liability','income','expense','equity','other'];
-  const labels={asset:'Assets',liability:'Liabilities',income:'Income',expense:'Expenses',equity:'Equity',other:'Other'};
-  let html=`<table><thead><tr><th>Account</th><th class="r">Balance</th></tr></thead><tbody>`;
-  for(const type of order){
-    const list=groups[type]; if(!list.length) continue;
-    list.sort((a,b)=>Math.abs(b.bal)-Math.abs(a.bal));
-    html+=`<tr class="row-section"><td colspan="2">${labels[type]}</td></tr>`;
-    const acctNames=list.map(x=>x.acct);
-    const balMap=Object.fromEntries(list.map(x=>[x.acct,x.bal]));
-    const rows=buildAcctRows(acctNames);
-    for(const row of rows){
-      if(row.isGroupHeader){
-        html+=`<tr><td style="padding:6px 22px 4px ${row.indent*14+28}px;font-size:11.5px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;background:#fafbff" colspan="2">${row.label}</td></tr>`;
+  // ── Step 1: build account universe from full history ──────────────
+  // This prevents accounts from disappearing when the period filter is narrow.
+  const allAccts = new Set();
+  for (const tx of allTransactions) for (const p of tx.postings) allAccts.add(p.account);
+
+  // ── Step 2: compute period balance for each known account ─────────
+  // Accounts with no activity in `txs` will have a balance of 0.
+  const balances = {};
+  for (const acct of allAccts) balances[acct] = 0; // initialise all to 0
+  for (const tx of txs) for (const p of tx.postings) {
+    balances[p.account] = (balances[p.account] ?? 0) + (p.amount ?? 0);
+  }
+
+  // ── Step 3: group accounts by type ───────────────────────────────
+  const groups = { income:[], expense:[], asset:[], liability:[], equity:[], other:[] };
+  for (const [a, b] of Object.entries(balances)) {
+    // For income/expense: skip zero-balance rows (no activity this period = not useful).
+    // For assets/liabilities: always show (user expects their accounts listed even if
+    // they had no transactions this period).
+    const type = acctType(a);
+    if (b === 0 && type !== 'asset' && type !== 'liability') continue;
+    groups[type].push({ acct: a, bal: b });
+  }
+
+  const order  = ['asset','liability','income','expense','equity','other'];
+  const labels = { asset:'Assets', liability:'Liabilities', income:'Income', expense:'Expenses', equity:'Equity', other:'Other' };
+  let html = `<table><thead><tr><th>Account</th><th class="r">Balance</th></tr></thead><tbody>`;
+
+  for (const type of order) {
+    const list = groups[type]; if (!list.length) continue;
+    list.sort((a, b) => Math.abs(b.bal) - Math.abs(a.bal));
+    html += `<tr class="row-section"><td colspan="2">${labels[type]}</td></tr>`;
+
+    const acctNames = list.map(x => x.acct);
+    const balMap    = Object.fromEntries(list.map(x => [x.acct, x.bal]));
+    const rows      = buildAcctRows(acctNames);
+
+    for (const row of rows) {
+      const acctEsc = row.fullAcct.replace(/'/g, "\\'");
+      if (row.isGroupHeader) {
+        // Group headers are now clickable — they filter to the parent prefix
+        // (e.g. "Assets:Checking") which catches all sub-accounts via startsWith.
+        html += `<tr class="acct-row" onclick="filterToAccount('${acctEsc}')" title="View all ${row.fullAcct} transactions" style="cursor:pointer">
+          <td style="padding:6px 22px 4px ${row.indent * 14 + 28}px;font-size:11.5px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em">
+            ${row.label} <span style="font-size:10px;color:#cbd5e1;margin-left:4px">→</span>
+          </td>
+          <td></td></tr>`;
       } else {
-        const bal=balMap[row.fullAcct]??0;
-        const d=type==='income'?-bal:bal, cls=d>=0?'c-green':'c-red';
-        const pad=(row.indent*14+36)+'px';
-        const acctEsc=row.fullAcct.replace(/'/g,"\\'");
-        html+=`<tr class="acct-row" onclick="filterToAccount('${acctEsc}')" title="View transactions for ${row.fullAcct}" style="cursor:pointer">
+        // Leaf account row — balance computed from period-filtered txs
+        const bal = balMap[row.fullAcct] ?? 0;
+        const d   = type === 'income' ? -bal : bal; // flip sign for income (credits are negative in ledger)
+        const cls = d >= 0 ? 'c-green' : 'c-red';
+        const pad = (row.indent * 14 + 36) + 'px';
+        html += `<tr class="acct-row" onclick="filterToAccount('${acctEsc}')" title="View transactions for ${row.fullAcct}" style="cursor:pointer">
           <td style="padding-left:${pad}">${row.label} <span style="font-size:10px;color:#cbd5e1;margin-left:4px">→</span></td>
-          <td class="td-r td-m ${cls}">${d>=0?'':'('}$${fmt(Math.abs(d))}${d<0?')':''}</td></tr>`;
+          <td class="td-r td-m ${cls}">${d >= 0 ? '' : '('}$${fmt(Math.abs(d))}${d < 0 ? ')' : ''}</td></tr>`;
       }
     }
   }
-  html+=`</tbody></table>`;
-  document.getElementById('accounts-table').innerHTML=html;
+  html += `</tbody></table>`;
+  document.getElementById('accounts-table').innerHTML = html;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2211,18 +2754,32 @@ function renderAccounts(txs) {
 // Both filters compose (AND). Postings for the highlighted account get the
 // tx-posting-hi CSS class. Cleared/pending transactions show a colored status badge.
 function renderTransactions(txs) {
-  // Apply account filter: keep only transactions that touch the selected account
+  // Apply account filter: keep transactions that touch the selected account OR any
+  // sub-account under it. Prefix matching (startsWith + ':') means clicking a group
+  // header like "Assets:Checking" correctly shows all "Assets:Checking:*" postings,
+  // not just transactions for the exact account "Assets:Checking".
   let filtered = txAcctFilter
-    ? txs.filter(t => t.postings.some(p => p.account === txAcctFilter))
+    ? txs.filter(t => t.postings.some(p =>
+        p.account === txAcctFilter || p.account.startsWith(txAcctFilter + ':')))
     : txs;
 
   // Apply status filter: match 'cleared', 'pending', or 'unmarked'
   if(txStatusFilter)
     filtered = filtered.filter(t => t.status === txStatusFilter);
 
+  // Feature 2: Apply free-text search across description and posting account names
+  if(txSearchFilter) {
+    filtered = filtered.filter(t =>
+      (t.description || '').toLowerCase().includes(txSearchFilter) ||
+      t.postings.some(p => p.account.toLowerCase().includes(txSearchFilter))
+    );
+  }
+
+  // Build filter label for the count line — include search term if active
   const filterParts = [];
   if(txAcctFilter)   filterParts.push(shortAcct(txAcctFilter));
   if(txStatusFilter) filterParts.push(txStatusFilter);
+  if(txSearchFilter) filterParts.push(`"${txSearchFilter}"`);
   const filterNote = filterParts.length ? ` · ${filterParts.join(', ')}` : '';
   document.getElementById('tx-count-label').textContent =
     `${filtered.length.toLocaleString()} transaction${filtered.length!==1?'s':''} · ${periodLabel()}${filterNote}`;
@@ -2239,13 +2796,62 @@ function renderTransactions(txs) {
     return ''; // unmarked — no badge
   };
 
-  let html=`<table><thead><tr><th>Date</th><th>Description</th><th>Postings</th></tr></thead><tbody>`;
-  for(const tx of [...filtered].reverse()){
-    const ph=tx.postings.map(p=>{
-      const highlight = txAcctFilter && p.account===txAcctFilter;
-      return `<div class="tx-posting${highlight?' tx-posting-hi':''}"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount??0)<0?'c-red':'c-slate'}">${p.amountStr??'—'}</span></div>`;
+  // Feature 3: Register view — chronological with running balance.
+  // Only activated for EXACT account matches (leaf accounts that exist as literal
+  // posting names). When a parent-prefix filter is active (e.g. "Assets:Checking"
+  // covering multiple sub-accounts), running a single cumulative balance doesn't
+  // make sense, so we fall through to the standard listing view instead.
+  const acctMatchFn = acct =>
+    acct === txAcctFilter || acct.startsWith(txAcctFilter + ':');
+  const isExactAcct = txAcctFilter &&
+    allTransactions.some(tx => tx.postings.some(p => p.account === txAcctFilter));
+  const isRegister  = isExactAcct; // only exact leaf accounts get the register view
+
+  if (isRegister) {
+    // Opening balance = sum of all postings to this exact account BEFORE period start
+    const { start } = getPeriodRange();
+    let runBal = 0;
+    for (const tx of allTransactions) {
+      if (tx.date >= start) break; // allTransactions is sorted ascending
+      for (const p of tx.postings) {
+        if (p.account === txAcctFilter) runBal += (p.amount ?? 0);
+      }
+    }
+
+    let html = `<table><thead><tr>
+      <th>Date</th><th>Description</th><th class="td-r">Amount</th><th class="td-r">Balance</th>
+    </tr></thead><tbody>`;
+
+    // Chronological order (oldest first) for register view
+    for (const tx of filtered) {
+      const posting = tx.postings.find(p => p.account === txAcctFilter);
+      const amt = posting?.amount ?? 0;
+      runBal += amt;
+      const amtCls = amt >= 0 ? 'c-blue' : 'c-red';
+      const balCls = runBal >= 0 ? 'c-blue' : 'c-red';
+      html += `<tr>
+        <td style="white-space:nowrap;font-size:12px;color:var(--text-3)">${tx.date}</td>
+        <td style="font-weight:500">${statusBadge(tx)}${tx.description || '—'}</td>
+        <td class="td-r td-m ${amtCls}">${posting?.amountStr ?? '—'}</td>
+        <td class="td-r td-m ${balCls}" style="font-weight:600">$${fmt(runBal)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+    document.getElementById('transactions-table').innerHTML = html;
+    return; // skip the default reverse-chronological rendering below
+  }
+
+  // Default: reverse chronological listing with posting rows highlighted.
+  // When a parent-prefix filter is active, all matching postings are highlighted
+  // (not just the exact account) so the user can see which sub-accounts are involved.
+  let html = `<table><thead><tr><th>Date</th><th>Description</th><th>Postings</th></tr></thead><tbody>`;
+  for (const tx of [...filtered].reverse()) {
+    const ph = tx.postings.map(p => {
+      // Highlight any posting that matches the filter (exact or sub-account)
+      const highlight = txAcctFilter && acctMatchFn(p.account);
+      return `<div class="tx-posting${highlight ? ' tx-posting-hi' : ''}"><span title="${p.account}">${shortAcct(p.account)}</span><span class="${(p.amount ?? 0) < 0 ? 'c-red' : 'c-slate'}">${p.amountStr ?? '—'}</span></div>`;
     }).join('');
-    html+=`<tr><td style="white-space:nowrap;font-size:12px;color:var(--text-3)">${tx.date}</td><td style="font-weight:500;min-width:140px">${statusBadge(tx)}${tx.description||'—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
+    html += `<tr><td style="white-space:nowrap;font-size:12px;color:var(--text-3)">${tx.date}</td><td style="font-weight:500;min-width:140px">${statusBadge(tx)}${tx.description || '—'}</td><td><div class="tx-postings">${ph}</div></td></tr>`;
   }
   html+=`</tbody></table>`;
   document.getElementById('transactions-table').innerHTML=html;
