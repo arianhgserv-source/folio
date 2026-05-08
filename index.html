@@ -2686,58 +2686,88 @@ function renderSankey() {
     }
   }
 
+  // ── Label helpers ─────────────────────────────────────────────────
+  // col4UniqueLabel: builds a context-aware display label for col-4 nodes.
+  // If two nodes share the same last path segment ("SECU", "SECU"), it promotes
+  // to last-2 segments ("Savings SECU", "Checking SECU") so every label is distinct.
+  // Result is then truncated to maxLen chars to prevent overflow.
+  const allCol4Names = [...acctNodes, ...savAcctNodes].map(n => n.name);
+  const lastSegs     = allCol4Names.map(n => n.split(':').pop());
+  const col4Label = (name, maxLen = 20) => {
+    const segs = name.split(':');
+    const last = segs[segs.length - 1];
+    // If this last segment is shared by another node, include the parent segment too
+    const isDup = lastSegs.filter(s => s === last).length > 1;
+    const raw   = isDup && segs.length > 1
+      ? `${segs[segs.length - 2]} ${last}`
+      : last;
+    return raw.length > maxLen ? raw.slice(0, maxLen - 1) + '…' : raw;
+  };
+
+  // Minimum node height below which we omit the label entirely (avoids pile-ups)
+  const MIN_LABEL_H   = 12; // px — primary label
+  const MIN_SUBLABEL_H = 22; // px — secondary ($amount) label
+
   // ── Budget node (col 2) ───────────────────────────────────────────
   const budMidX = c1x + nodeW / 2;
   nodeData['sk-nc'] = { label: 'Budget', amount: totalInc, pct: 100, sub: `$${fmtK(totalExp)} spent · $${fmtK(savings)} saved` };
   svg += `<rect id="sk-nc" class="sk-node" x="${c1x}" y="${centerY}" width="${nodeW}" height="${centerH}" rx="3" fill="#6366f1"/>`;
-  svg += `<text x="${budMidX}" y="${centerY - 9}" text-anchor="middle" font-size="11" font-weight="600" fill="#475569" font-family="system-ui">Budget</text>`;
-  svg += `<text x="${budMidX}" y="${centerY + centerH + 15}" text-anchor="middle" font-size="10" fill="#94a3b8" font-family="system-ui">$${fmtK(totalInc)}</text>`;
+  // Larger, bolder Budget label above the node
+  svg += `<text x="${budMidX}" y="${centerY - 11}" text-anchor="middle" font-size="13" font-weight="700" fill="#334155" font-family="system-ui">Budget</text>`;
+  svg += `<text x="${budMidX}" y="${centerY + centerH + 16}" text-anchor="middle" font-size="11" fill="#94a3b8" font-family="system-ui">$${fmtK(totalInc)}</text>`;
 
-  // ── Income nodes + labels (col 1) ────────────────────────────────
+  // ── Income nodes + labels (col 1, left side) ─────────────────────
   incNodes.forEach((n, i) => {
     const col = getCategoryColor(n.name), id = `sk-ni-${i}`;
     nodeData[id] = { label: n.name, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
     svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
-    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
-    svg += `<text x="${n.x - 8}" y="${ly}" text-anchor="end" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${n.name}</text>`;
-    if (n.h > 16) svg += `<text x="${n.x - 8}" y="${ly + 13}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+    if (n.h < MIN_LABEL_H) return; // too thin to label cleanly
+    const ly = n.y + n.h / 2 + (n.h > 26 ? -5 : 4);
+    svg += `<text x="${n.x - 8}" y="${ly}" text-anchor="end" font-size="13" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${n.name}</text>`;
+    if (n.h >= MIN_SUBLABEL_H) svg += `<text x="${n.x - 8}" y="${ly + 14}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
   });
 
-  // ── Category nodes + labels (col 3) ──────────────────────────────
-  // Labels appear to the RIGHT of col 3 nodes, in the space between col 3 and col 4.
-  // Ribbons passing through that space are transparent (0.42), so text stays readable.
+  // ── Category nodes + labels (col 3, labels on LEFT side) ─────────
+  // Labels placed LEFT of each node (text-anchor="end") to keep them out of the
+  // outgoing-ribbon zone. The incoming Budget→Category ribbons arrive from the left
+  // and merge into the node, so the left face is ribbon-covered — but each ribbon
+  // lands at the same height as its own label, keeping things readable.
   catNodes3.forEach((cat, i) => {
     const col = cat.color ?? getCategoryColor(cat.name);
     const id  = `sk-ncat-${i}`;
     nodeData[id] = { label: cat.name, amount: cat.total, pct: Math.round(cat.total / totalInc * 100) };
     svg += `<rect id="${id}" class="sk-node" x="${cat.x}" y="${cat.y}" width="${nodeW}" height="${cat.h}" rx="3" fill="${col}"/>`;
-    const ly = cat.y + cat.h / 2 + (cat.h > 24 ? -4 : 4);
-    svg += `<text x="${cat.x + nodeW + 6}" y="${ly}" text-anchor="start" font-size="11" font-weight="600" fill="#475569" font-family="system-ui" pointer-events="none">${cat.name}</text>`;
-    if (cat.h > 16) svg += `<text x="${cat.x + nodeW + 6}" y="${ly + 12}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(cat.total)}</text>`;
+    if (cat.h < MIN_LABEL_H) return;
+    const ly = cat.y + cat.h / 2 + (cat.h > 26 ? -5 : 4);
+    svg += `<text x="${cat.x - 8}" y="${ly}" text-anchor="end" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${cat.name}</text>`;
+    if (cat.h >= MIN_SUBLABEL_H) svg += `<text x="${cat.x - 8}" y="${ly + 13}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(cat.total)}</text>`;
   });
 
-  // ── Individual account nodes + labels (col 4) — expenses ────────────
+  // ── Individual account nodes + labels (col 4, right side) ────────
+  // Labels use col4Label() for deduplication; only rendered if node is tall enough.
   acctNodes.forEach((n, i) => {
     const col   = getCategoryColor(catKey(n.name));
     const id    = `sk-na-${i}`;
-    const label = shortAcct(n.name); // last path segment, e.g. "Rent"
+    const label = col4Label(n.name);
     nodeData[id] = { label: n.name, displayLabel: label, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
     svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
-    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
-    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
-    if (n.h > 16) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+    if (n.h < MIN_LABEL_H) return;
+    const ly = n.y + n.h / 2 + (n.h > 26 ? -5 : 4);
+    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="13" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
+    if (n.h >= MIN_SUBLABEL_H) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 14}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
   });
 
-  // ── Savings destination account nodes + labels (col 4) ────────────
-  // Rendered in green to visually distinguish them from expense accounts.
+  // ── Savings destination account nodes + labels (col 4, right side) ─
+  // Green color to distinguish from expense accounts.
   savAcctNodes.forEach((n, i) => {
     const id    = `sk-nsav-${i}`;
-    const label = shortAcct(n.name);
+    const label = col4Label(n.name);
     nodeData[id] = { label: n.name, displayLabel: label, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
     svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="#16a34a"/>`;
-    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
-    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#16a34a" font-family="system-ui" pointer-events="none">${label}</text>`;
-    if (n.h > 16) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+    if (n.h < MIN_LABEL_H) return;
+    const ly = n.y + n.h / 2 + (n.h > 26 ? -5 : 4);
+    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="13" font-weight="600" fill="#16a34a" font-family="system-ui" pointer-events="none">${label}</text>`;
+    if (n.h >= MIN_SUBLABEL_H) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 14}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
   });
 
   svg_el.setAttribute('viewBox', `0 0 ${W} ${H}`);
