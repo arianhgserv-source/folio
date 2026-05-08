@@ -2396,7 +2396,8 @@ function renderSankey() {
   const txs = filteredTxs();
 
   // ── Aggregate income by catKey, expenses by full account path ────
-  const incomeMap = {}, expenseRaw = {};
+  // Also track net change per asset account to determine savings destinations.
+  const incomeMap = {}, expenseRaw = {}, assetNetChange = {};
   for (const tx of txs) for (const p of tx.postings) {
     const a = p.amount ?? 0;
     if (isIncome(p.account)) {
@@ -2404,12 +2405,32 @@ function renderSankey() {
       incomeMap[k] = (incomeMap[k] || 0) + (-a);
     } else if (isExpense(p.account)) {
       expenseRaw[p.account] = (expenseRaw[p.account] || 0) + a;
+    } else if (isAsset(p.account)) {
+      // Track net inflow per asset account — positive net change = money accumulated here
+      assetNetChange[p.account] = (assetNetChange[p.account] ?? 0) + a;
     }
   }
 
   const totalInc = Object.values(incomeMap).reduce((s, v) => s + v, 0);
   const totalExp = Object.values(expenseRaw).reduce((s, v) => s + v, 0);
   const savings  = Math.max(0, totalInc - totalExp);
+
+  // ── Savings destination accounts ──────────────────────────────────
+  // Asset accounts with a positive net change in the period received net inflows
+  // (savings, transfers, income deposits). We proportionally scale them so they
+  // sum to exactly `savings`, giving a correct Sankey balance.
+  const rawSavAccts = Object.entries(assetNetChange)
+    .filter(([, v]) => v > 0.5)           // ignore dust / rounding
+    .sort((a, b) => b[1] - a[1]);
+  const savAcctRawTotal = rawSavAccts.reduce((s, [, v]) => s + v, 0);
+  // Scale factor: squeeze or expand so savings-col4 totals exactly equal savings
+  const savScale = (savings > 0.5 && savAcctRawTotal > 0)
+    ? savings / savAcctRawTotal : 1;
+  // Final list of [accountName, scaledValue]; only used when savings > 0
+  const savingsAccts = savings > 0.5
+    ? rawSavAccts.map(([acc, v]) => [acc, v * savScale])
+    : [];
+  const hasSavingsAccts = savingsAccts.length > 0;
 
   // Update period label and summary stat cards
   document.getElementById('sankey-period-desc').textContent = periodLabel();
@@ -2478,8 +2499,8 @@ function renderSankey() {
 
   // Node counts — used for dynamic SVG height
   const numCatNodes  = catEntries.length + (hasOther ? 1 : 0) + (savings > 0.5 ? 1 : 0);
-  // Col 4 contains only real expense accounts (savings/other stay in col 3)
-  const numAcctNodes = rawExpEntries.length;
+  // Col 4 now includes expense accounts AND savings destination accounts
+  const numAcctNodes = rawExpEntries.length + savingsAccts.length;
   const maxNodes = Math.max(incEntries.length, numCatNodes, numAcctNodes);
   const H  = Math.max(500, mt + mb + maxNodes * 32);
   const AH = H - mt - mb;
@@ -2498,18 +2519,9 @@ function renderSankey() {
   const scaleCat  = totalCatVal  > 0 ? (AH - catGapsTotal)  / totalCatVal  : 1;
   const chCat = v => Math.max(v * scaleCat, 3);
 
-  // Col 4: account column fills AH independently of col 3 — the key to "dynamic
-  // spreading". A $24 subscription with two equal accounts (Audible, Amazon) will
-  // each occupy ~half the diagram height in col 4, regardless of savings size.
-  let fixedGapsAcct = 0;
-  for (let ci = 0; ci < catEntries.length; ci++) {
-    const [, c] = catEntries[ci];
-    fixedGapsAcct += (c.accounts.length - 1) * intraCatGap;
-    if (ci < catEntries.length - 1) fixedGapsAcct += interCatGap;
-  }
-  const totalAcctVal = rawExpEntries.reduce((s, [, v]) => s + v, 0);
-  const scaleAcct = totalAcctVal > 0 ? (AH - fixedGapsAcct) / totalAcctVal : 1;
-  const chAcct = v => Math.max(v * scaleAcct, 3);
+  // Col 4 scale is computed later (after savingsAccts is known) as scaleAcct2 / chAcct2.
+  // Placeholder aliases kept here so code below can reference chAcct before the real
+  // definition — they get overwritten by the chAcct2 lambda defined in the layout block.
 
   // ── Layout: income nodes (col 1) — fills AH ──────────────────────
   const incTotalH = incEntries.reduce((s, [, v]) => s + chInc(v), 0) + incGapsTotal;
@@ -2540,31 +2552,69 @@ function renderSankey() {
   if (savings > 0.5) {
     if (catNodes3.length > 0) cy3 += interCatGap;
     const h = chCat(savings);
-    catNodes3.push({ name: 'Savings', total: savings, x: c2x, y: cy3, h, isTerminal: true, color: '#16a34a' });
+    // No isTerminal — Savings now fans out to asset accounts in col 4
+    catNodes3.push({ name: 'Savings', total: savings, x: c2x, y: cy3, h, color: '#16a34a' });
   }
 
   // ── Layout: account nodes (col 4) — fills AH independently ────────
-  // Only real expense accounts; savings/other have no col-4 representation.
-  // Groups are separated by interCatGap so related accounts stay clustered.
-  let accTotalH = 0;
+  // Col 4 now has two groups: expense accounts (fanned from categories) and
+  // savings destination accounts (fanned from the Savings node).
+  // The col-4 scale is based on all col-4 items so the whole height is used.
+
+  // Recompute col-4 scale to include both expense and savings destination accounts
+  let fixedGapsAcct2 = 0;
   for (let ci = 0; ci < catEntries.length; ci++) {
     const [, c] = catEntries[ci];
-    for (const { val } of c.accounts) accTotalH += chAcct(val);
-    accTotalH += (c.accounts.length - 1) * intraCatGap;
-    if (ci < catEntries.length - 1) accTotalH += interCatGap;
+    fixedGapsAcct2 += (c.accounts.length - 1) * intraCatGap;
+    if (ci < catEntries.length - 1) fixedGapsAcct2 += interCatGap;
   }
+  // Add gap between expense group and savings group, and gaps within savings group
+  if (hasSavingsAccts && catEntries.length > 0) fixedGapsAcct2 += interCatGap * 2;
+  if (hasSavingsAccts) fixedGapsAcct2 += (savingsAccts.length - 1) * intraCatGap;
 
-  let ey = mt + (AH - accTotalH) / 2;
+  const totalAcctVal2 = rawExpEntries.reduce((s, [, v]) => s + v, 0)
+                      + savingsAccts.reduce((s, [, v]) => s + v, 0);
+  const scaleAcct2 = totalAcctVal2 > 0 ? (AH - fixedGapsAcct2) / totalAcctVal2 : 1;
+  const chAcct2 = v => Math.max(v * scaleAcct2, 3);
+
+  // Compute total height of expense accounts block for vertical centering
+  let expBlockH = 0;
+  for (let ci = 0; ci < catEntries.length; ci++) {
+    const [, c] = catEntries[ci];
+    for (const { val } of c.accounts) expBlockH += chAcct2(val);
+    expBlockH += (c.accounts.length - 1) * intraCatGap;
+    if (ci < catEntries.length - 1) expBlockH += interCatGap;
+  }
+  let savBlockH = 0;
+  if (hasSavingsAccts) {
+    for (const [, v] of savingsAccts) savBlockH += chAcct2(v);
+    savBlockH += (savingsAccts.length - 1) * intraCatGap;
+  }
+  const totalCol4H = expBlockH + (hasSavingsAccts && catEntries.length > 0 ? interCatGap * 2 : 0) + savBlockH;
+
+  let ey = mt + (AH - totalCol4H) / 2;
   const acctNodes = [];
   for (let ci = 0; ci < catEntries.length; ci++) {
     const [catName, c] = catEntries[ci];
     for (let ai = 0; ai < c.accounts.length; ai++) {
       const { acc, val } = c.accounts[ai];
-      const h = chAcct(val);
-      acctNodes.push({ name: acc, val, x: rx, y: ey, h, catName });
+      const h = chAcct2(val);
+      acctNodes.push({ name: acc, val, x: rx, y: ey, h, catName, isSavings: false });
       ey += h + (ai < c.accounts.length - 1 ? intraCatGap : 0);
     }
     if (ci < catEntries.length - 1) ey += interCatGap;
+  }
+
+  // Savings destination accounts — laid out below expense accounts
+  const savAcctNodes = [];
+  if (hasSavingsAccts) {
+    if (catEntries.length > 0) ey += interCatGap * 2; // visual separator between groups
+    for (let ai = 0; ai < savingsAccts.length; ai++) {
+      const [acc, val] = savingsAccts[ai];
+      const h = chAcct2(val);
+      savAcctNodes.push({ name: acc, val, x: rx, y: ey, h, catName: 'Savings', isSavings: true });
+      ey += h + (ai < savingsAccts.length - 1 ? intraCatGap : 0);
+    }
   }
 
   // ── Budget node (col 2) — spans full AH as the flow "spine" ───────
@@ -2618,6 +2668,24 @@ function renderSankey() {
     catConsumed[n.catName] = consumed + rh;
   });
 
+  // ── Ribbons: Savings (col 3) → savings destination accounts (col 4) ─
+  // The Savings node fans out to asset accounts that had net positive inflows.
+  // Proportional allocation exactly covers the Savings node height.
+  if (hasSavingsAccts) {
+    const savNode = catNodes3.find(c => c.name === 'Savings');
+    if (savNode) {
+      let savConsumed = 0;
+      const savTotal = savingsAccts.reduce((s, [, v]) => s + v, 0);
+      savAcctNodes.forEach((n, i) => {
+        const rh  = (n.val / savTotal) * savNode.h;
+        const id  = `sk-rsav-${i}`;
+        ribbonData[id] = { src: 'Savings', dest: shortAcct(n.name), fullAcct: n.name, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+        svg += `<path id="${id}" class="sk-ribbon" d="${ribbonD(c2x + nodeW, savNode.y + savConsumed, rh, rx, n.y, n.h)}" fill="#16a34a" opacity="0.42"/>`;
+        savConsumed += rh;
+      });
+    }
+  }
+
   // ── Budget node (col 2) ───────────────────────────────────────────
   const budMidX = c1x + nodeW / 2;
   nodeData['sk-nc'] = { label: 'Budget', amount: totalInc, pct: 100, sub: `$${fmtK(totalExp)} spent · $${fmtK(savings)} saved` };
@@ -2648,9 +2716,7 @@ function renderSankey() {
     if (cat.h > 16) svg += `<text x="${cat.x + nodeW + 6}" y="${ly + 12}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(cat.total)}</text>`;
   });
 
-  // ── Individual account nodes + labels (col 4) ─────────────────────
-  // Terminal nodes: savings and other live only in col 3, so acctNodes never
-  // contains them — no col-4 rendering needed for those.
+  // ── Individual account nodes + labels (col 4) — expenses ────────────
   acctNodes.forEach((n, i) => {
     const col   = getCategoryColor(catKey(n.name));
     const id    = `sk-na-${i}`;
@@ -2659,6 +2725,18 @@ function renderSankey() {
     svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="${col}"/>`;
     const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
     svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#334155" font-family="system-ui" pointer-events="none">${label}</text>`;
+    if (n.h > 16) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
+  });
+
+  // ── Savings destination account nodes + labels (col 4) ────────────
+  // Rendered in green to visually distinguish them from expense accounts.
+  savAcctNodes.forEach((n, i) => {
+    const id    = `sk-nsav-${i}`;
+    const label = shortAcct(n.name);
+    nodeData[id] = { label: n.name, displayLabel: label, amount: n.val, pct: Math.round(n.val / totalInc * 100) };
+    svg += `<rect id="${id}" class="sk-node" x="${n.x}" y="${n.y}" width="${nodeW}" height="${n.h}" rx="3" fill="#16a34a"/>`;
+    const ly = n.y + n.h / 2 + (n.h > 24 ? -4 : 4);
+    svg += `<text x="${n.x + nodeW + 8}" y="${ly}" text-anchor="start" font-size="12" font-weight="600" fill="#16a34a" font-family="system-ui" pointer-events="none">${label}</text>`;
     if (n.h > 16) svg += `<text x="${n.x + nodeW + 8}" y="${ly + 13}" text-anchor="start" font-size="10" fill="#94a3b8" font-family="system-ui" pointer-events="none">$${fmtK(n.val)}</text>`;
   });
 
